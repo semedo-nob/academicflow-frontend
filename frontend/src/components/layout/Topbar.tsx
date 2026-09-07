@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
+import { defaultNavigationSuggestions, searchNavigation } from '../../lib/navSearch';
 import { auditService, conflictService, searchService } from '../../services';
 import { IconBell, IconChevDown, IconSearch } from '../ui/Icons';
 import { DrawerCloseButton } from '../ui/Drawer';
@@ -20,7 +21,10 @@ const BREADCRUMBS: Record<string, string> = {
   '/import': 'AcademicFlow / Import',
   '/reports': 'AcademicFlow / Reports',
   '/admin': 'AcademicFlow / Administration',
+  '/profile': 'AcademicFlow / Profile',
 };
+
+type Hit = { type: string; id: string; title: string; subtitle: string; path: string };
 
 function NotificationsDrawer({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
@@ -97,8 +101,9 @@ export function Topbar() {
   const crumb = BREADCRUMBS[pathname] || 'AcademicFlow';
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const [hits, setHits] = useState<{ type: string; id: string; title: string; subtitle: string; path: string }[]>([]);
+  const [hits, setHits] = useState<Hit[]>([]);
   const [searching, setSearching] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -113,22 +118,55 @@ export function Topbar() {
       ? semesterOptions
       : [{ id: 'default-sem', academicYearId: '', academicYearLabel: '', name: period.semesterName }];
 
-  const runSearch = useCallback(async (q: string) => {
-    setQuery(q);
-    if (!q.trim()) {
-      setHits([]);
-      return;
-    }
-    setSearching(true);
-    try {
-      const res = await searchService.search(q.trim());
-      setHits(res.hits);
-    } catch {
-      setHits([]);
-    } finally {
-      setSearching(false);
-    }
-  }, []);
+  const go = useCallback(
+    (path: string) => {
+      setSearchOpen(false);
+      navigate(path);
+    },
+    [navigate],
+  );
+
+  const runSearch = useCallback(
+    async (q: string) => {
+      setQuery(q);
+      setActiveIndex(0);
+      const trimmed = q.trim();
+      if (!trimmed) {
+        setHits(defaultNavigationSuggestions(user.role));
+        return;
+      }
+      const navHits = searchNavigation(trimmed, user.role);
+      setHits(navHits);
+      setSearching(true);
+      try {
+        const res = await searchService.search(trimmed);
+        const entityHits: Hit[] = res.hits.map((h) => ({
+          type: h.type,
+          id: h.id,
+          title: h.title,
+          subtitle: h.subtitle,
+          path: h.path,
+        }));
+        // Prefer navigation matches first, then entity results (dedupe by path+title)
+        const seen = new Set(navHits.map((h) => `${h.path}::${h.title}`));
+        const merged = [
+          ...navHits,
+          ...entityHits.filter((h) => {
+            const key = `${h.path}::${h.title}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          }),
+        ];
+        setHits(merged.slice(0, 24));
+      } catch {
+        setHits(navHits);
+      } finally {
+        setSearching(false);
+      }
+    },
+    [user.role],
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -144,12 +182,14 @@ export function Topbar() {
 
   useEffect(() => {
     if (searchOpen) {
+      setHits(defaultNavigationSuggestions(user.role));
       setTimeout(() => inputRef.current?.focus(), 50);
     } else {
       setQuery('');
       setHits([]);
+      setActiveIndex(0);
     }
-  }, [searchOpen]);
+  }, [searchOpen, user.role]);
 
   return (
     <>
@@ -166,7 +206,7 @@ export function Topbar() {
         <div className="topbar-center">
           <button type="button" className="search-box search-box-btn" onClick={() => setSearchOpen(true)}>
             <IconSearch />
-            <span>Search lecturers, units, requests…</span>
+            <span>Go to page, lecturer, unit…</span>
             <kbd>⌘K</kbd>
           </button>
         </div>
@@ -228,6 +268,17 @@ export function Topbar() {
                   style={{ width: '100%', marginTop: 10 }}
                   onClick={() => {
                     setMenuOpen(false);
+                    navigate('/profile');
+                  }}
+                >
+                  Profile
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{ width: '100%', marginTop: 8 }}
+                  onClick={() => {
+                    setMenuOpen(false);
                     logout();
                     navigate('/login');
                   }}
@@ -248,28 +299,40 @@ export function Topbar() {
               <input
                 ref={inputRef}
                 value={query}
-                placeholder="Search anything across AcademicFlow…"
+                placeholder='Try “board”, “allocated”, “profile”, unit codes…'
                 onChange={(e) => void runSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setActiveIndex((i) => Math.min(i + 1, Math.max(hits.length - 1, 0)));
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setActiveIndex((i) => Math.max(i - 1, 0));
+                  } else if (e.key === 'Enter' && hits[activeIndex]) {
+                    e.preventDefault();
+                    go(hits[activeIndex].path);
+                  }
+                }}
               />
               <kbd>Esc</kbd>
             </div>
             <div className="search-modal-body">
-              {searching && <p className="section-sub">Searching…</p>}
+              {searching && <p className="section-sub">Searching records…</p>}
+              {!query && (
+                <p className="section-sub">Jump to a page, or search lecturers, units, and requests.</p>
+              )}
               {!searching && query && hits.length === 0 && (
                 <p className="section-sub">No matches for “{query}”.</p>
               )}
-              {!query && <p className="section-sub">Try a lecturer name, unit code, or request status.</p>}
-              {hits.map((h) => (
+              {hits.map((h, i) => (
                 <button
-                  key={`${h.type}-${h.id}`}
+                  key={`${h.type}-${h.id}-${h.path}`}
                   type="button"
-                  className="search-hit"
-                  onClick={() => {
-                    setSearchOpen(false);
-                    navigate(h.path);
-                  }}
+                  className={`search-hit${i === activeIndex ? ' active' : ''}`}
+                  onMouseEnter={() => setActiveIndex(i)}
+                  onClick={() => go(h.path)}
                 >
-                  <span className="badge badge-info">{h.type}</span>
+                  <span className={`badge ${h.type === 'Go to' ? 'badge-neutral' : 'badge-info'}`}>{h.type}</span>
                   <span className="search-hit-main">
                     <span className="search-hit-title">{h.title}</span>
                     <span className="cell-sub">{h.subtitle}</span>

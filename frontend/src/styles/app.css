@@ -459,6 +459,7 @@ tbody tr:hover{background:#FAFBFD;}
   border-radius:8px;cursor:pointer;text-align:left;font:inherit;
 }
 .search-hit:hover{background:var(--bg);}
+.search-hit.active{background:var(--bg);}
 .search-hit-main{display:flex;flex-direction:column;gap:2px;min-width:0;}
 .search-hit-title{font-weight:600;font-size:13.5px;color:var(--text-primary);}
 

@@ -138,6 +138,7 @@ export function canAccessPath(role: Role | string, path: string): boolean {
     'reports',
     'admin',
   ];
+  if (segment === 'profile') return true;
   if (!known.includes(segment as NavKey)) return true;
   return canAccessNav(role, segment as NavKey);
 }

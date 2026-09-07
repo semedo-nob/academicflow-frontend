@@ -180,6 +180,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const openDrawer = useCallback((node: ReactNode) => setDrawer(node), []);
   const closeDrawer = useCallback(() => setDrawer(null), []);
 
+  useEffect(() => {
+    const onUserUpdated = () => setUser(loadUser());
+    window.addEventListener('af-user-updated', onUserUpdated);
+    return () => window.removeEventListener('af-user-updated', onUserUpdated);
+  }, []);
+
   const value = useMemo(
     () => ({
       authenticated,

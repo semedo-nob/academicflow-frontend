@@ -21,6 +21,7 @@ import { ApprovalsPage } from './pages/ApprovalsPage';
 import { ImportPage } from './pages/ImportPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { AdminPage } from './pages/AdminPage';
+import { ProfilePage } from './pages/ProfilePage';
 import {
   PlatformAnalyticsPage,
   PlatformAuditPage,
@@ -96,6 +97,7 @@ export default function App() {
               <Route path="data" element={<PlatformDataPage />} />
               <Route path="support" element={<PlatformSupportPage />} />
               <Route path="system" element={<PlatformSystemPage />} />
+              <Route path="profile" element={<ProfilePage />} />
             </Route>
 
             <Route
@@ -119,6 +121,7 @@ export default function App() {
               <Route path="/import" element={<InstitutionGate><ImportPage /></InstitutionGate>} />
               <Route path="/reports" element={<InstitutionGate><ReportsPage /></InstitutionGate>} />
               <Route path="/admin" element={<InstitutionGate><AdminPage /></InstitutionGate>} />
+              <Route path="/profile" element={<InstitutionGate><ProfilePage /></InstitutionGate>} />
             </Route>
 
             <Route path="*" element={<AuthHomeRedirect />} />
