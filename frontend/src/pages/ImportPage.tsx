@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAsyncData } from '../hooks/useAsyncData';
+import { useFeedback } from '../context/FeedbackContext';
 import { importService } from '../services';
 import { Button } from '../components/ui/Button';
 import { Card, PageHead } from '../components/ui/Drawer';
@@ -27,6 +28,7 @@ type UploadResult = {
 
 export function ImportPage() {
   const navigate = useNavigate();
+  const { confirm, error: notifyError, success, toast } = useFeedback();
   const steps = ['Upload', 'Detect', 'Map', 'Validate', 'Preview', 'Import'];
   const [current, setCurrent] = useState(0);
   const [tick, setTick] = useState(0);
@@ -54,7 +56,7 @@ export function ImportPage() {
     if (!file) return;
     const lower = file.name.toLowerCase();
     if (!lower.endsWith('.csv') && !lower.endsWith('.pdf') && !lower.endsWith('.tsv') && !lower.endsWith('.txt')) {
-      window.alert('Supported formats: CSV, TSV, TXT, or PDF.');
+      toast('Supported formats: CSV, TSV, TXT, or PDF.', 'warning');
       return;
     }
     setBusy(true);
@@ -64,8 +66,9 @@ export function ImportPage() {
       setActiveSessionId(result.sessionId);
       setCurrent(2);
       setTick((t) => t + 1);
+      success(`Parsed ${result.rowCount} rows from ${result.fileName}`);
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : 'Upload/parse failed');
+      notifyError(e instanceof Error ? e.message : 'Upload/parse failed');
     } finally {
       setBusy(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -78,6 +81,14 @@ export function ImportPage() {
       fileRef.current?.click();
       return;
     }
+    if (current >= 4) {
+      const ok = await confirm({
+        title: 'Commit import',
+        message: 'Write validated rows into AcademicFlow? This creates lecturers or academic units for your institution.',
+        confirmLabel: 'Import now',
+      });
+      if (!ok) return;
+    }
     setBusy(true);
     try {
       const updated = await importService.advance(id);
@@ -85,23 +96,34 @@ export function ImportPage() {
       setCurrent(STATUS_TO_STEP[updated.status] ?? current);
       setTick((t) => t + 1);
       if (updated.status === 'IMPORTED') {
-        window.alert(
+        success(
           `Import committed. ${updated.entityType === 'ACADEMIC_UNIT' ? 'Units' : 'Lecturers'} are now in the system.`,
         );
         navigate(updated.entityType === 'ACADEMIC_UNIT' ? '/units' : '/lecturers');
       }
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : 'Could not advance import');
+      notifyError(e instanceof Error ? e.message : 'Could not advance import');
     } finally {
       setBusy(false);
     }
   };
 
+  const progressPct = Math.round(((current + (busy ? 0.45 : 0)) / Math.max(steps.length - 1, 1)) * 100);
+  const progressLabel = busy
+    ? current >= 4
+      ? 'Committing import…'
+      : current === 0
+        ? 'Uploading and detecting columns…'
+        : 'Processing next import step…'
+    : current >= 5
+      ? 'Import complete'
+      : `Step ${current + 1} of ${steps.length}: ${steps[current]}`;
+
   return (
     <>
       <PageHead
         title="Import / Export"
-        subtitle="Upload CSV or PDF globally — AcademicFlow detects columns, maps fields, validates, and commits to the database."
+        subtitle="Upload CSV or PDF — AcademicFlow detects columns, maps fields, validates, and commits. Academic year and semester columns update the period for imported units."
       />
       <Card>
         <div className="steps-row">
@@ -114,6 +136,19 @@ export function ImportPage() {
               {i < steps.length - 1 && <div className="step-line" />}
             </div>
           ))}
+        </div>
+
+        <div className="import-progress" aria-live="polite">
+          <div className="import-progress-meta">
+            <span>{progressLabel}</span>
+            <span className="mono">{Math.min(100, progressPct)}%</span>
+          </div>
+          <div className="import-progress-track">
+            <div
+              className={`import-progress-bar${busy ? ' pulsing' : ''}`}
+              style={{ width: `${Math.min(100, Math.max(6, progressPct))}%` }}
+            />
+          </div>
         </div>
 
         <div

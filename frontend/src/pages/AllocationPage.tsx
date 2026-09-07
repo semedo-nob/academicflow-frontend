@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
+import { useFeedback } from '../context/FeedbackContext';
 import { useAsyncData } from '../hooks/useAsyncData';
 import { allocationService, unitService, type ApiAllocation } from '../services';
 import { Badge, initialsAvatar } from '../components/ui/Badge';
@@ -153,6 +154,7 @@ function AllocationDrawer({
 
 export function AllocationPage() {
   const { openDrawer, closeDrawer } = useApp();
+  const { confirm, error: notifyError, success } = useFeedback();
   const navigate = useNavigate();
   const [tick, setTick] = useState(0);
   const { data: units } = useAsyncData(() => unitService.list(), [], [tick]);
@@ -162,13 +164,20 @@ export function AllocationPage() {
   const refresh = () => setTick((t) => t + 1);
 
   const submitApproval = async (allocationId: string) => {
+    const ok = await confirm({
+      title: 'Submit for approval',
+      message: 'Send this allocation to the approvals queue?',
+      confirmLabel: 'Submit',
+    });
+    if (!ok) return;
     try {
       await allocationService.submit(allocationId);
       closeDrawer();
       refresh();
+      success('Submitted for approval');
       navigate('/approvals');
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : 'Submit failed');
+      notifyError(e instanceof Error ? e.message : 'Submit failed');
     }
   };
 

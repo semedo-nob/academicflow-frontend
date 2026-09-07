@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CONFLICTS } from '../data/mockData';
 import { useAsyncData } from '../hooks/useAsyncData';
+import { useFeedback } from '../context/FeedbackContext';
 import { conflictService } from '../services';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
@@ -11,6 +12,7 @@ export function ConflictsPage() {
   const [tab, setTab] = useState(0);
   const [tick, setTick] = useState(0);
   const navigate = useNavigate();
+  const { confirm, error: notifyError, success } = useFeedback();
   const { data: conflicts, fromApi } = useAsyncData(() => conflictService.list(), CONFLICTS, [tick]);
   const filtered = conflicts.filter((c) => {
     if (tab === 1) return c.category === 'Workload';
@@ -22,11 +24,18 @@ export function ConflictsPage() {
   });
 
   const resolve = async (id: string) => {
+    const ok = await confirm({
+      title: 'Resolve conflict',
+      message: 'Mark this conflict as resolved? This is recorded for the allocation trail.',
+      confirmLabel: 'Resolve',
+    });
+    if (!ok) return;
     try {
       await conflictService.resolve(id);
       setTick((t) => t + 1);
+      success('Conflict resolved');
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : 'Resolve failed');
+      notifyError(e instanceof Error ? e.message : 'Resolve failed');
     }
   };
 

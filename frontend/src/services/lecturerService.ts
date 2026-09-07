@@ -129,6 +129,24 @@ export const authService = {
       '/auth/register-institution',
       body,
     ),
+  previewInvitation: (token: string) =>
+    api.get<{
+      email: string;
+      name: string;
+      role: string;
+      institutionName: string;
+      status: string;
+      expired: boolean;
+    }>(`/auth/invitations/${encodeURIComponent(token)}`),
+  acceptInvitation: async (body: { token: string; name?: string; password?: string }) => {
+    const res = await api.post<{ email: string; name: string; role: string; tenantId: string }>(
+      '/auth/accept-invitation',
+      body,
+    );
+    setTenantId(res.tenantId);
+    localStorage.setItem('af_user', JSON.stringify(res));
+    return res;
+  },
 };
 
 export const lecturerService = {
@@ -535,6 +553,36 @@ export const userService = {
   }) => api.post('/admin/users', body),
   update: (id: string, body: { role?: string; active?: boolean; name?: string; organizationNodeId?: string | null }) =>
     api.put(`/admin/users/${id}`, body),
+  invitations: () =>
+    api.get<
+      {
+        id: string;
+        email: string;
+        name: string;
+        role: string;
+        organizationNodeId: string | null;
+        status: string;
+        token: string;
+        invitePath: string;
+        createdAt: string;
+        expiresAt: string;
+      }[]
+    >('/admin/invitations'),
+  invite: (body: {
+    email: string;
+    name: string;
+    role: string;
+    organizationNodeId?: string | null;
+  }) =>
+    api.post<{
+      id: string;
+      email: string;
+      name: string;
+      role: string;
+      invitePath: string;
+      token: string;
+      status: string;
+    }>('/admin/invitations', body),
 };
 
 export const adminService = {

@@ -347,3 +347,20 @@ class SecurityEvent(
     var details: String? = null,
     var createdAt: Instant = Instant.now()
 )
+
+@Entity
+@Table(name = "invitations")
+class Invitation(
+    @Id var id: UUID = UUID.randomUUID(),
+    var tenantId: UUID = UUID(0, 0),
+    var email: String = "",
+    var fullName: String = "",
+    var role: String = "VIEWER",
+    var organizationNodeId: UUID? = null,
+    var token: String = "",
+    var status: String = "PENDING",
+    var invitedBy: UUID? = null,
+    var createdAt: Instant = Instant.now(),
+    var expiresAt: Instant = Instant.now().plusSeconds(60L * 60 * 24 * 14),
+    var acceptedAt: Instant? = null
+)

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 import { useAsyncData } from '../hooks/useAsyncData';
+import { useFeedback } from '../context/FeedbackContext';
 import { exportService, timetableService } from '../services';
 import { Button } from '../components/ui/Button';
 import { PageHead } from '../components/ui/Drawer';
@@ -9,6 +10,7 @@ const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 const HOURS = [8, 9, 10, 11, 12, 13, 14, 15, 16];
 
 export function TimetablePage() {
+  const { error: notifyError, success } = useFeedback();
   const [tick, setTick] = useState(0);
   const [checkMsg, setCheckMsg] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -85,8 +87,9 @@ export function TimetablePage() {
                 setExporting(true);
                 try {
                   await exportService.download('timetable', 'csv');
+                  success('Timetable CSV downloaded');
                 } catch (e) {
-                  window.alert(e instanceof Error ? e.message : 'Export failed');
+                  notifyError(e instanceof Error ? e.message : 'Export failed');
                 } finally {
                   setExporting(false);
                 }
@@ -101,8 +104,9 @@ export function TimetablePage() {
                 setExporting(true);
                 try {
                   await exportService.download('timetable', 'pdf');
+                  success('Timetable PDF downloaded');
                 } catch (e) {
-                  window.alert(e instanceof Error ? e.message : 'Export failed');
+                  notifyError(e instanceof Error ? e.message : 'Export failed');
                 } finally {
                   setExporting(false);
                 }

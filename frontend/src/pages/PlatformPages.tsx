@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useFeedback } from '../context/FeedbackContext';
 import { platformApi } from '../services/platformApi';
 import { Button } from '../components/ui/Button';
 import { PageHead } from '../components/ui/Drawer';
@@ -15,6 +16,7 @@ function statusBadge(status: string) {
 }
 
 export function PlatformDashboardPage() {
+  const { error: notifyError } = useFeedback();
   const [data, setData] = useState<Awaited<ReturnType<typeof platformApi.commandCenter>> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -38,7 +40,7 @@ export function PlatformDashboardPage() {
       await platformApi.lifecycle(id, { status: approve ? 'APPROVED' : 'REJECTED', note: approve ? 'Approved' : 'Rejected' });
       await load();
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : 'Failed');
+      notifyError(e instanceof Error ? e.message : 'Failed');
     } finally {
       setBusyId(null);
     }
@@ -155,6 +157,7 @@ function PendingQueue({
 }
 
 export function PlatformInstitutionsPage() {
+  const { confirm, error: notifyError, success } = useFeedback();
   const [filter, setFilter] = useState('');
   const [rows, setRows] = useState<Awaited<ReturnType<typeof platformApi.institutions>>>([]);
   const [error, setError] = useState<string | null>(null);
@@ -169,13 +172,20 @@ export function PlatformInstitutionsPage() {
   }, [filter]);
 
   const act = async (id: string, status: string) => {
-    if (!window.confirm(`${status} this institution?`)) return;
+    const ok = await confirm({
+      title: `${status} institution`,
+      message: `Are you sure you want to mark this institution as ${status}? This affects customer access to AcademicFlow.`,
+      confirmLabel: status,
+      danger: status === 'SUSPENDED' || status === 'REJECTED' || status === 'ARCHIVED',
+    });
+    if (!ok) return;
     setBusyId(id);
     try {
       await platformApi.lifecycle(id, { status, note: `${status} by product owner` });
+      success(`Institution set to ${status}`);
       await load();
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : 'Failed');
+      notifyError(e instanceof Error ? e.message : 'Failed');
     } finally {
       setBusyId(null);
     }
@@ -342,6 +352,7 @@ export function PlatformInstitutionDetailPage() {
 }
 
 export function PlatformUsersPage() {
+  const { confirm, error: notifyError, success } = useFeedback();
   const [q, setQ] = useState('');
   const [rows, setRows] = useState<Awaited<ReturnType<typeof platformApi.users>>>([]);
   const load = () => void platformApi.users(q || undefined).then(setRows).catch(() => setRows([]));
@@ -395,9 +406,20 @@ export function PlatformUsersPage() {
                         <Button
                           size="sm"
                           onClick={async () => {
-                            if (!window.confirm('Suspend this account?')) return;
-                            await platformApi.setUserStatus(u.id, { status: 'SUSPENDED' });
-                            load();
+                            const ok = await confirm({
+                              title: 'Suspend account',
+                              message: `Suspend ${u.name} (${u.email})? They will not be able to sign in until reactivated.`,
+                              confirmLabel: 'Suspend',
+                              danger: true,
+                            });
+                            if (!ok) return;
+                            try {
+                              await platformApi.setUserStatus(u.id, { status: 'SUSPENDED' });
+                              success('Account suspended');
+                              load();
+                            } catch (e) {
+                              notifyError(e instanceof Error ? e.message : 'Failed');
+                            }
                           }}
                         >
                           Suspend
@@ -407,8 +429,13 @@ export function PlatformUsersPage() {
                           size="sm"
                           variant="primary"
                           onClick={async () => {
-                            await platformApi.setUserStatus(u.id, { status: 'ACTIVE' });
-                            load();
+                            try {
+                              await platformApi.setUserStatus(u.id, { status: 'ACTIVE' });
+                              success('Account activated');
+                              load();
+                            } catch (e) {
+                              notifyError(e instanceof Error ? e.message : 'Failed');
+                            }
                           }}
                         >
                           Activate

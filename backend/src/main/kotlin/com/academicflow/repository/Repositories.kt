@@ -127,3 +127,9 @@ interface PlatformSettingRepository : JpaRepository<PlatformSetting, UUID> {
 interface SecurityEventRepository : JpaRepository<SecurityEvent, UUID> {
     fun findAllByOrderByCreatedAtDesc(): List<SecurityEvent>
 }
+
+interface InvitationRepository : JpaRepository<Invitation, UUID> {
+    fun findByTenantIdOrderByCreatedAtDesc(tenantId: UUID): List<Invitation>
+    fun findByToken(token: String): Invitation?
+    fun findByTenantIdAndEmailIgnoreCaseAndStatus(tenantId: UUID, email: String, status: String): List<Invitation>
+}

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { UNITS } from '../data/mockData';
 import { useApp } from '../context/AppContext';
+import { useFeedback } from '../context/FeedbackContext';
 import { useAsyncData } from '../hooks/useAsyncData';
 import { organizationService, unitService } from '../services';
 import { Badge } from '../components/ui/Badge';
@@ -53,6 +54,7 @@ function UnitDrawer({ unit, onClose }: { unit: AcademicUnit; onClose: () => void
 
 export function UnitsPage() {
   const { openDrawer, closeDrawer } = useApp();
+  const { error: notifyError, success } = useFeedback();
   const [tick, setTick] = useState(0);
   const { data: units, fromApi } = useAsyncData(() => unitService.list(), UNITS, [tick]);
   const { data: orgs } = useAsyncData(() => organizationService.list(), [], []);
@@ -76,8 +78,9 @@ export function UnitsPage() {
       });
       setShowAdd(false);
       setTick((t) => t + 1);
+      success('Academic unit created');
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : 'Failed');
+      notifyError(e instanceof Error ? e.message : 'Failed');
     } finally {
       setBusy(false);
     }

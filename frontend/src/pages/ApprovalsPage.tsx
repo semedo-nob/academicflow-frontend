@@ -2,11 +2,13 @@ import { useState } from 'react';
 import { APPROVALS } from '../data/mockData';
 import { approvalService, allocationService, exportService } from '../services';
 import { useAsyncData } from '../hooks/useAsyncData';
+import { useFeedback } from '../context/FeedbackContext';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { PageHead, Tabs } from '../components/ui/Drawer';
 
 export function ApprovalsPage() {
+  const { confirm, error: notifyError, success } = useFeedback();
   const [tab, setTab] = useState(0);
   const [tick, setTick] = useState(0);
   const [exporting, setExporting] = useState<string | null>(null);
@@ -23,14 +25,24 @@ export function ApprovalsPage() {
 
   const decide = async (allocationId: string | undefined, approve: boolean) => {
     if (!allocationId) return;
+    const ok = await confirm({
+      title: approve ? 'Approve allocation' : 'Reject allocation',
+      message: approve
+        ? 'Approve this allocation and publish the timetable slot?'
+        : 'Reject this allocation? The request will need to be reassigned.',
+      confirmLabel: approve ? 'Approve' : 'Reject',
+      danger: !approve,
+    });
+    if (!ok) return;
     try {
       await allocationService.approve(allocationId, approve, approve ? 'Approved' : 'Rejected');
       setTick((t) => t + 1);
+      success(approve ? 'Allocation approved' : 'Allocation rejected');
       if (approve) {
         setTab(1);
       }
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : 'Decision failed');
+      notifyError(e instanceof Error ? e.message : 'Decision failed');
     }
   };
 
@@ -39,8 +51,9 @@ export function ApprovalsPage() {
     setExporting(key);
     try {
       await exportService.download(kind, format);
+      success(`${kind} ${format.toUpperCase()} downloaded`);
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : 'Export failed');
+      notifyError(e instanceof Error ? e.message : 'Export failed');
     } finally {
       setExporting(null);
     }

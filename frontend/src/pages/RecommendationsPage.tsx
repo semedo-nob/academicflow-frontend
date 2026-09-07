@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MAT204_CANDIDATES } from '../data/mockData';
 import { useApp } from '../context/AppContext';
+import { useFeedback } from '../context/FeedbackContext';
 import { useAsyncData } from '../hooks/useAsyncData';
 import { allocationService, requestService } from '../services';
 import { Button } from '../components/ui/Button';
@@ -47,6 +48,7 @@ function RecCard({
   selecting: boolean;
 }) {
   const { openDrawer, closeDrawer } = useApp();
+  const { prompt } = useFeedback();
   const metrics: [string, number][] = [
     ['Expertise', d.metrics.expertise],
     ['Availability', d.metrics.availability],
@@ -126,15 +128,20 @@ function RecCard({
             variant="primary"
             disabled={selecting}
             onClick={() => {
-              if (topCandidateId && topCandidateId !== d.lecturerId) {
-                const reason = window.prompt(
-                  'Override the top recommendation? Enter a reason for the audit log:',
-                );
-                if (!reason) return;
-                onSelect(d, reason);
-              } else {
-                onSelect(d);
-              }
+              void (async () => {
+                if (topCandidateId && topCandidateId !== d.lecturerId) {
+                  const reason = await prompt({
+                    title: 'Override top recommendation',
+                    message: 'Enter a reason for the audit log when selecting a lecturer who is not the top recommendation.',
+                    placeholder: 'Reason for override…',
+                    confirmLabel: 'Select lecturer',
+                  });
+                  if (!reason) return;
+                  onSelect(d, reason);
+                } else {
+                  onSelect(d);
+                }
+              })();
             }}
           >
             Select lecturer
@@ -148,6 +155,7 @@ function RecCard({
 export function RecommendationsPage() {
   const navigate = useNavigate();
   const { selectedRequestId, setSelectedRequestId } = useApp();
+  const { error: notifyError, success } = useFeedback();
   const [selecting, setSelecting] = useState(false);
   const [requestMeta, setRequestMeta] = useState<{ unit: string; from: string; to: string; students: number; hours: number } | null>(null);
 
@@ -211,8 +219,9 @@ export function RecommendationsPage() {
         }
       }
       navigate('/allocation');
+      success('Lecturer selected — review on the allocation board');
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Allocation failed');
+      notifyError(err instanceof Error ? err.message : 'Allocation failed');
     } finally {
       setSelecting(false);
     }

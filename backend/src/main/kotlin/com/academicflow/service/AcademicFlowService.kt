@@ -28,7 +28,9 @@ class AcademicFlowService(
     private val matchingService: MatchingService,
     private val timetableRepo: TimetableEntryRepository,
     private val securityEventRepo: SecurityEventRepository,
-    private val platformSettingRepo: PlatformSettingRepository
+    private val platformSettingRepo: PlatformSettingRepository,
+    private val yearRepo: AcademicYearRepository,
+    private val semesterRepo: SemesterRepository
 ) {
 
     fun login(req: LoginRequest): LoginResponse {
@@ -41,7 +43,7 @@ class AcademicFlowService(
         }
         val all = userRepo.findByEmailIgnoreCase(email)
         val matches = all.filter {
-            it.active && it.accountStatus !in listOf("SUSPENDED", "LOCKED", "DEACTIVATED")
+            it.active && it.accountStatus !in listOf("SUSPENDED", "LOCKED", "DEACTIVATED", "PENDING")
         }
         val user = matches.firstOrNull { it.tenantId == TenantContext.get() }
             ?: matches.firstOrNull()
@@ -84,8 +86,13 @@ class AcademicFlowService(
                         "This institution has been suspended. Contact the platform administrator."
                     )
                 }
-                if (inactive.accountStatus in listOf("SUSPENDED", "LOCKED", "DEACTIVATED")) {
-                    throw IllegalStateException("This account is ${inactive.accountStatus.lowercase()}. Contact support.")
+                if (inactive.accountStatus in listOf("SUSPENDED", "LOCKED", "DEACTIVATED", "PENDING")) {
+                    throw IllegalStateException(
+                        if (inactive.accountStatus == "PENDING")
+                            "This account is waiting for an invitation to be accepted. Use your invite link to activate it."
+                        else
+                            "This account is ${inactive.accountStatus.lowercase()}. Contact support."
+                    )
                 }
             }
             throw NoSuchElementException("Invalid email or password")
@@ -257,6 +264,16 @@ class AcademicFlowService(
     @Transactional
     fun createRequest(req: CreateTeachingRequest): TeachingRequestDto {
         val tenantId = TenantContext.get()
+        require(req.requestingDepartmentId.toString().isNotBlank()) { "Requesting department is required" }
+        require(req.academicUnitId.toString().isNotBlank()) { "Academic unit is required" }
+        if (req.preferredDepartmentId != null && req.preferredDepartmentId == req.requestingDepartmentId) {
+            throw IllegalArgumentException("Preferred department must differ from the requesting department")
+        }
+        val depts = orgRepo.findByTenantIdOrderByNameAsc(tenantId).filter { it.type.equals("Department", true) }
+        require(depts.any { it.id == req.requestingDepartmentId }) { "Requesting department not found in this institution" }
+        if (req.preferredDepartmentId != null) {
+            require(depts.any { it.id == req.preferredDepartmentId }) { "Preferred department not found in this institution" }
+        }
         val saved = requestRepo.save(
             TeachingRequest(
                 tenantId = tenantId,
@@ -721,17 +738,29 @@ class AcademicFlowService(
                 "ACADEMIC_UNIT" -> {
                     val code = field("code", "Course Code") ?: return@forEach
                     val name = field("name", "Course Name") ?: code
-                    if (unitRepo.findByTenantIdOrderByCodeAsc(tenantId).none { it.code.equals(code, true) }) {
+                    val deptName = field("organizationNode", "Department")
+                    val org = deptName?.let { d -> orgs.firstOrNull { it.name.equals(d, true) } } ?: defaultOrg
+                    val yearLabel = field("academicYear", "Academic Year", "Year", "Year of Study")
+                    val semesterName = field("semester", "Semester")
+                    val (yearId, semesterId) = resolvePeriod(tenantId, yearLabel, semesterName)
+                    val exists = unitRepo.findByTenantIdOrderByCodeAsc(tenantId).any {
+                        it.code.equals(code, true) &&
+                            it.academicYearId == yearId &&
+                            it.semesterId == semesterId
+                    }
+                    if (!exists) {
                         unitRepo.save(
                             AcademicUnit(
                                 tenantId = tenantId,
                                 code = code,
                                 name = name,
-                                sourceDepartmentId = defaultOrg.id,
+                                sourceDepartmentId = org.id,
                                 contactHours = field("contactHours", "Hours", "Teaching Hours")?.toBigDecimalOrNull()
                                     ?: BigDecimal("3"),
                                 studentCount = field("studentCount", "Students")?.toIntOrNull() ?: 40,
-                                requiredExpertise = field("requiredExpertise") ?: "General",
+                                academicYearId = yearId,
+                                semesterId = semesterId,
+                                requiredExpertise = field("requiredExpertise", "Expertise") ?: "General",
                                 status = "Unallocated"
                             )
                         )
@@ -742,6 +771,36 @@ class AcademicFlowService(
         audit("Import committed", "ImportSession", session.id.toString(), session.entityType)
     }
 
+    private fun resolvePeriod(tenantId: UUID, yearLabel: String?, semesterName: String?): Pair<UUID?, UUID?> {
+        if (yearLabel.isNullOrBlank() && semesterName.isNullOrBlank()) {
+            val years = yearRepo.findByTenantIdOrderByLabelDesc(tenantId)
+            val year = years.firstOrNull()
+            val sem = year?.let {
+                semesterRepo.findByTenantIdAndAcademicYearIdOrderBySequenceNoAsc(tenantId, it.id).firstOrNull()
+            }
+            return year?.id to sem?.id
+        }
+        val label = yearLabel?.trim()?.takeIf { it.isNotEmpty() } ?: "Imported"
+        var year = yearRepo.findByTenantIdOrderByLabelDesc(tenantId).firstOrNull { it.label.equals(label, true) }
+        if (year == null) {
+            year = yearRepo.save(AcademicYear(tenantId = tenantId, label = label))
+        }
+        val semLabel = semesterName?.trim()?.takeIf { it.isNotEmpty() } ?: "Semester 1"
+        var sem = semesterRepo.findByTenantIdAndAcademicYearIdOrderBySequenceNoAsc(tenantId, year.id)
+            .firstOrNull { it.name.equals(semLabel, true) }
+        if (sem == null) {
+            val seq = when {
+                semLabel.contains("2") -> 2
+                semLabel.contains("3") -> 3
+                else -> 1
+            }
+            sem = semesterRepo.save(
+                Semester(tenantId = tenantId, academicYearId = year.id, name = semLabel, sequenceNo = seq)
+            )
+        }
+        return year.id to sem.id
+    }
+
     private fun defaultImportRows(entityType: String): List<Map<String, String>> =
         if (entityType.equals("ACADEMIC_UNIT", true)) {
             listOf(
@@ -750,7 +809,9 @@ class AcademicFlowService(
                     "Course Name" to "Special Topics",
                     "Department" to "Computer Science",
                     "Teaching Hours" to "3",
-                    "Students" to "45"
+                    "Students" to "45",
+                    "Academic Year" to "2026/2027",
+                    "Semester" to "Semester 1"
                 )
             )
         } else {

@@ -6,7 +6,9 @@ import com.academicflow.entity.*
 import com.academicflow.repository.*
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import java.time.Instant
 import java.time.LocalDate
+import java.time.temporal.ChronoUnit
 import java.util.UUID
 
 @Service
@@ -21,7 +23,8 @@ class AdminConfigService(
     private val settingRepo: SystemSettingRepository,
     private val mappingRepo: ImportMappingProfileRepository,
     private val orgRepo: OrganizationNodeRepository,
-    private val auditRepo: AuditLogRepository
+    private val auditRepo: AuditLogRepository,
+    private val invitationRepo: InvitationRepository
 ) {
     fun listInstitutions(): List<InstitutionDto> =
         tenantRepo.findAll()
@@ -455,12 +458,130 @@ class AdminConfigService(
                 role = req.role,
                 organizationNodeId = orgId,
                 passwordHash = "local",
-                active = req.active
+                active = req.active,
+                accountStatus = if (req.active) "ACTIVE" else "PENDING"
             )
         )
         audit("User created", "User", saved.id.toString(), saved.email)
         return UserDto(saved.id, saved.email, saved.fullName, saved.role, saved.active, saved.organizationNodeId)
     }
+
+    fun listInvitations(): List<InvitationDto> =
+        invitationRepo.findByTenantIdOrderByCreatedAtDesc(TenantContext.get()).map { toInvitationDto(it) }
+
+    @Transactional
+    fun createInvitation(req: CreateInvitationRequest): InvitationDto {
+        val tenantId = TenantContext.get()
+        val email = req.email.trim().lowercase()
+        val name = req.name.trim()
+        require(email.isNotEmpty() && name.isNotEmpty()) { "Name and email are required" }
+        if (userRepo.findByTenantIdAndEmail(tenantId, email)?.active == true) {
+            throw IllegalArgumentException("An active user with this email already exists")
+        }
+        invitationRepo.findByTenantIdAndEmailIgnoreCaseAndStatus(tenantId, email, "PENDING")
+            .forEach {
+                it.status = "REVOKED"
+                invitationRepo.save(it)
+            }
+        val token = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID().toString().replace("-", "").take(8)
+        val saved = invitationRepo.save(
+            Invitation(
+                tenantId = tenantId,
+                email = email,
+                fullName = name,
+                role = req.role.trim().ifBlank { "VIEWER" },
+                organizationNodeId = req.organizationNodeId,
+                token = token,
+                status = "PENDING",
+                expiresAt = Instant.now().plus(14, ChronoUnit.DAYS)
+            )
+        )
+        audit("Invitation sent", "Invitation", saved.id.toString(), "${saved.email} · ${saved.role}")
+        return toInvitationDto(saved)
+    }
+
+    fun previewInvitation(token: String): InvitationPreviewDto {
+        val inv = invitationRepo.findByToken(token.trim())
+            ?: throw NoSuchElementException("Invitation not found")
+        val tenant = tenantRepo.findById(inv.tenantId).orElse(null)
+        val expired = inv.expiresAt.isBefore(Instant.now()) || inv.status != "PENDING"
+        return InvitationPreviewDto(
+            email = inv.email,
+            name = inv.fullName,
+            role = inv.role,
+            institutionName = tenant?.name ?: "Institution",
+            status = inv.status,
+            expired = expired
+        )
+    }
+
+    @Transactional
+    fun acceptInvitation(req: AcceptInvitationRequest): LoginResponse {
+        val inv = invitationRepo.findByToken(req.token.trim())
+            ?: throw NoSuchElementException("Invitation not found")
+        if (inv.status != "PENDING") throw IllegalStateException("This invitation is no longer valid")
+        if (inv.expiresAt.isBefore(Instant.now())) {
+            inv.status = "EXPIRED"
+            invitationRepo.save(inv)
+            throw IllegalStateException("This invitation has expired")
+        }
+        val name = req.name?.trim()?.takeIf { it.isNotEmpty() } ?: inv.fullName
+        val existing = userRepo.findByTenantIdAndEmail(inv.tenantId, inv.email)
+        val user = if (existing != null) {
+            existing.fullName = name
+            existing.role = inv.role
+            existing.organizationNodeId = inv.organizationNodeId ?: existing.organizationNodeId
+            existing.active = true
+            existing.accountStatus = "ACTIVE"
+            existing.passwordHash = req.password?.takeIf { it.isNotBlank() } ?: existing.passwordHash ?: "local"
+            userRepo.save(existing)
+        } else {
+            userRepo.save(
+                AppUser(
+                    tenantId = inv.tenantId,
+                    email = inv.email,
+                    fullName = name,
+                    role = inv.role,
+                    organizationNodeId = inv.organizationNodeId,
+                    passwordHash = req.password?.takeIf { it.isNotBlank() } ?: "local",
+                    active = true,
+                    accountStatus = "ACTIVE"
+                )
+            )
+        }
+        inv.status = "ACCEPTED"
+        inv.acceptedAt = Instant.now()
+        invitationRepo.save(inv)
+        auditRepo.save(
+            AuditLog(
+                tenantId = inv.tenantId,
+                actorId = user.id,
+                action = "Invitation accepted",
+                entityType = "Invitation",
+                entityId = inv.id.toString(),
+                details = user.email
+            )
+        )
+        return LoginResponse(
+            email = user.email,
+            name = user.fullName,
+            role = user.role,
+            tenantId = user.tenantId
+        )
+    }
+
+    private fun toInvitationDto(i: Invitation) = InvitationDto(
+        id = i.id,
+        email = i.email,
+        name = i.fullName,
+        role = i.role,
+        organizationNodeId = i.organizationNodeId,
+        status = i.status,
+        token = i.token,
+        invitePath = "/login?invite=${i.token}",
+        createdAt = i.createdAt.toString(),
+        expiresAt = i.expiresAt.toString()
+    )
 
     @Transactional
     fun updateUser(id: UUID, req: UpdateUserRequest): UserDto {

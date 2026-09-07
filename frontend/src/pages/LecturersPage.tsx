@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { LECTURERS } from '../data/mockData';
 import { useApp } from '../context/AppContext';
+import { useFeedback } from '../context/FeedbackContext';
 import { useAsyncData } from '../hooks/useAsyncData';
 import { lecturerService, organizationService } from '../services';
 import { Avatar, Badge } from '../components/ui/Badge';
@@ -77,6 +78,7 @@ function LecturerDrawer({ lecturer, onClose }: { lecturer: Lecturer; onClose: ()
 
 export function LecturersPage() {
   const { openDrawer, closeDrawer } = useApp();
+  const { error: notifyError, success } = useFeedback();
   const [tick, setTick] = useState(0);
   const { data: lecturers, fromApi } = useAsyncData(() => lecturerService.list(), LECTURERS, [tick]);
   const { data: orgs } = useAsyncData(() => organizationService.list(), [], []);
@@ -119,8 +121,9 @@ export function LecturersPage() {
       });
       setShowAdd(false);
       setTick((t) => t + 1);
+      success('Lecturer created');
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : 'Failed to create lecturer');
+      notifyError(e instanceof Error ? e.message : 'Failed to create lecturer');
     } finally {
       setBusy(false);
     }

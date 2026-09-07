@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { REPORT_CATS } from '../data/mockData';
 import { useApp } from '../context/AppContext';
+import { useFeedback } from '../context/FeedbackContext';
 import { exportService, reportService } from '../services';
 import { Button } from '../components/ui/Button';
 import { Card, PageHead } from '../components/ui/Drawer';
@@ -21,6 +22,7 @@ function reportType(label: string): string {
 
 export function ReportsPage() {
   const { period } = useApp();
+  const { error: notifyError, success } = useFeedback();
   const [preview, setPreview] = useState<{ title: string; metrics: Record<string, string> } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [exporting, setExporting] = useState<string | null>(null);
@@ -31,7 +33,7 @@ export function ReportsPage() {
       const res = await reportService.get(reportType(label));
       setPreview({ title: label, metrics: res.metrics });
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : 'Report failed');
+      notifyError(e instanceof Error ? e.message : 'Report failed');
     } finally {
       setBusy(null);
     }
@@ -42,8 +44,9 @@ export function ReportsPage() {
     setExporting(key);
     try {
       await exportService.download(kind, format);
+      success(`${kind} ${format.toUpperCase()} downloaded`);
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : 'Export failed');
+      notifyError(e instanceof Error ? e.message : 'Export failed');
     } finally {
       setExporting(null);
     }

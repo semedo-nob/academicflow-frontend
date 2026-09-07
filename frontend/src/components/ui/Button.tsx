@@ -1,6 +1,6 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 
-type Variant = 'default' | 'primary' | 'ghost' | 'danger-text';
+type Variant = 'default' | 'primary' | 'ghost' | 'danger-text' | 'danger';
 type Size = 'md' | 'sm';
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -23,6 +23,7 @@ export function Button({
     variant === 'primary' && 'btn-primary',
     variant === 'ghost' && 'btn-ghost',
     variant === 'danger-text' && 'btn-danger-text',
+    variant === 'danger' && 'btn-danger',
     size === 'sm' && 'btn-sm',
     fullWidth && 'btn-full',
     className,

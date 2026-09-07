@@ -37,6 +37,24 @@ class ApiControllers(
         throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
     }
 
+    @GetMapping("/auth/invitations/{token}")
+    fun previewInvitation(@PathVariable token: String) = try {
+        admin.previewInvitation(token)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    }
+
+    @PostMapping("/auth/accept-invitation")
+    fun acceptInvitation(@RequestBody req: AcceptInvitationRequest) = try {
+        admin.acceptInvitation(req)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    } catch (e: IllegalStateException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    } catch (e: IllegalArgumentException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    }
+
     @GetMapping("/dashboard")
     fun dashboard() = service.dashboard()
 
@@ -65,7 +83,11 @@ class ApiControllers(
     fun requests() = service.listRequests()
 
     @PostMapping("/requests")
-    fun createRequest(@RequestBody req: CreateTeachingRequest) = service.createRequest(req)
+    fun createRequest(@RequestBody req: CreateTeachingRequest) = try {
+        service.createRequest(req)
+    } catch (e: IllegalArgumentException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    }
 
     @GetMapping("/requests/{id}/candidates")
     fun candidates(@PathVariable id: UUID) = service.getCandidates(id)
@@ -125,6 +147,13 @@ class ApiControllers(
     @PostMapping("/imports/{id}/advance")
     fun advanceImport(@PathVariable id: UUID) = try {
         service.advanceImportSession(id)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    }
+
+    @GetMapping("/imports/{id}/rows")
+    fun importRows(@PathVariable id: UUID) = try {
+        service.listImportRows(id)
     } catch (e: NoSuchElementException) {
         throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
     }
@@ -250,16 +279,19 @@ class AdminControllers(private val admin: AdminConfigService, private val servic
         throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
     }
 
+    @GetMapping("/invitations")
+    fun invitations() = admin.listInvitations()
+
+    @PostMapping("/invitations")
+    fun createInvitation(@RequestBody req: CreateInvitationRequest) = try {
+        admin.createInvitation(req)
+    } catch (e: IllegalArgumentException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    }
+
     @PutMapping("/users/{id}")
     fun updateUser(@PathVariable id: UUID, @RequestBody req: UpdateUserRequest) = try {
         admin.updateUser(id, req)
-    } catch (e: NoSuchElementException) {
-        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
-    }
-
-    @GetMapping("/imports/{id}/rows")
-    fun importRows(@PathVariable id: UUID) = try {
-        service.listImportRows(id)
     } catch (e: NoSuchElementException) {
         throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
     }

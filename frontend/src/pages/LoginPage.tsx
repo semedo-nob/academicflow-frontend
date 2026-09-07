@@ -6,13 +6,14 @@ import { homePath, normalizeRole } from '../lib/access';
 import { BrandMark } from '../components/ui/Icons';
 import { Button } from '../components/ui/Button';
 
-type Mode = 'signin' | 'register';
+type Mode = 'signin' | 'register' | 'invite';
 
 export function LoginPage() {
   const { login, authenticated, user } = useApp();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
-  const mode: Mode = params.get('mode') === 'register' ? 'register' : 'signin';
+  const inviteToken = params.get('invite')?.trim() || '';
+  const mode: Mode = inviteToken ? 'invite' : params.get('mode') === 'register' ? 'register' : 'signin';
 
   const [email, setEmail] = useState(() => localStorage.getItem('af_remember_email') || '');
   const [password, setPassword] = useState('');
@@ -22,6 +23,14 @@ export function LoginPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [forgotOpen, setForgotOpen] = useState(false);
   const [forgotMsg, setForgotMsg] = useState<string | null>(null);
+  const [inviteName, setInviteName] = useState('');
+  const [invitePreview, setInvitePreview] = useState<{
+    email: string;
+    name: string;
+    role: string;
+    institutionName: string;
+    expired: boolean;
+  } | null>(null);
 
   const [reg, setReg] = useState({
     name: '',
@@ -29,6 +38,28 @@ export function LoginPage() {
     adminName: '',
     adminEmail: '',
   });
+
+  useEffect(() => {
+    if (!inviteToken) {
+      setInvitePreview(null);
+      return;
+    }
+    let cancelled = false;
+    void authService
+      .previewInvitation(inviteToken)
+      .then((p) => {
+        if (cancelled) return;
+        setInvitePreview(p);
+        setInviteName(p.name);
+        setEmail(p.email);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : 'Invalid invitation');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inviteToken]);
 
   if (authenticated) {
     return <Navigate to={homePath(user.role)} replace />;
@@ -38,6 +69,7 @@ export function LoginPage() {
     setError(null);
     setSuccess(null);
     const p = new URLSearchParams(params);
+    p.delete('invite');
     if (next === 'register') p.set('mode', 'register');
     else p.delete('mode');
     setParams(p, { replace: true });
@@ -61,6 +93,27 @@ export function LoginPage() {
       navigate(homePath(role));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Sign in failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleAcceptInvite = async () => {
+    if (!inviteToken) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await authService.acceptInvitation({
+        token: inviteToken,
+        name: inviteName.trim() || undefined,
+        password: password || 'local',
+      });
+      localStorage.setItem('af_auth', '1');
+      const role = normalizeRole(res.role);
+      navigate(homePath(role));
+      window.location.reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not accept invitation');
     } finally {
       setBusy(false);
     }
@@ -91,13 +144,14 @@ export function LoginPage() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Enter' && !forgotOpen) {
         if (mode === 'signin') void handleSignIn();
+        else if (mode === 'invite') void handleAcceptInvite();
         else void handleRegister();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, email, password, remember, reg, forgotOpen]);
+  }, [mode, email, password, remember, reg, forgotOpen, inviteToken, inviteName]);
 
   return (
     <div id="login-screen">
@@ -113,7 +167,7 @@ export function LoginPage() {
             Allocate with confidence.
           </div>
           <p className="login-sub">
-            Institutions register for an account. Once approved, admins assign roles and run
+            Institutions register for an account. Once approved, admins invite colleagues and run
             allocation from request to published timetable.
           </p>
           <p className="login-sub" style={{ marginTop: 16 }}>
@@ -125,20 +179,61 @@ export function LoginPage() {
       </div>
       <div className="login-right">
         <div className="login-card">
-          <div className="btn-row" style={{ marginBottom: 16 }}>
-            <Button size="sm" variant={mode === 'signin' ? 'primary' : undefined} onClick={() => setMode('signin')}>
-              Sign in
-            </Button>
-            <Button
-              size="sm"
-              variant={mode === 'register' ? 'primary' : undefined}
-              onClick={() => setMode('register')}
-            >
-              Register institution
-            </Button>
-          </div>
+          {mode !== 'invite' && (
+            <div className="btn-row" style={{ marginBottom: 16 }}>
+              <Button size="sm" variant={mode === 'signin' ? 'primary' : undefined} onClick={() => setMode('signin')}>
+                Sign in
+              </Button>
+              <Button
+                size="sm"
+                variant={mode === 'register' ? 'primary' : undefined}
+                onClick={() => setMode('register')}
+              >
+                Register institution
+              </Button>
+            </div>
+          )}
 
-          {mode === 'signin' ? (
+          {mode === 'invite' ? (
+            <>
+              <h2>Accept invitation</h2>
+              <p className="hint">
+                {invitePreview
+                  ? `${invitePreview.institutionName} invited you as ${invitePreview.role}.`
+                  : 'Loading invitation…'}
+              </p>
+              {invitePreview?.expired && (
+                <p className="section-sub" style={{ color: 'var(--danger)', marginBottom: 12 }}>
+                  This invitation is expired or no longer valid.
+                </p>
+              )}
+              <div className="field">
+                <label>Email</label>
+                <input value={invitePreview?.email || email} disabled />
+              </div>
+              <div className="field">
+                <label>Full name</label>
+                <input value={inviteName} onChange={(e) => setInviteName(e.target.value)} />
+              </div>
+              <div className="field">
+                <label>Password (optional in demo)</label>
+                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+              </div>
+              {error && (
+                <p className="section-sub" style={{ color: 'var(--danger)', marginBottom: 12 }}>
+                  {error}
+                </p>
+              )}
+              <Button
+                variant="primary"
+                fullWidth
+                disabled={busy || !inviteToken || !!invitePreview?.expired}
+                onClick={() => void handleAcceptInvite()}
+              >
+                {busy ? 'Activating…' : 'Accept & continue'}
+              </Button>
+            </>
+          ) : mode === 'signin' ? (
             <>
               <h2>Sign in</h2>
               <p className="hint">One account for your institution workspace.</p>

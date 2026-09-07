@@ -127,6 +127,8 @@ class FileImportService(
                     key.contains("hour") || key.contains("contact") -> "contactHours"
                     key.contains("student") || key.contains("enrol") -> "studentCount"
                     key.contains("expert") -> "requiredExpertise"
+                    key.contains("academic year") || key == "year" || key.contains("year of study") -> "academicYear"
+                    key.contains("semester") || key == "sem" || key == "term" -> "semester"
                     else -> null
                 }
                 else -> when {

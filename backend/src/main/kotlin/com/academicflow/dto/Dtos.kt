@@ -351,3 +351,38 @@ data class ReportSummaryDto(
     val metrics: Map<String, String>
 )
 
+data class InvitationDto(
+    val id: UUID,
+    val email: String,
+    val name: String,
+    val role: String,
+    val organizationNodeId: UUID?,
+    val status: String,
+    val token: String,
+    val invitePath: String,
+    val createdAt: String,
+    val expiresAt: String
+)
+
+data class CreateInvitationRequest(
+    val email: String,
+    val name: String,
+    val role: String,
+    val organizationNodeId: UUID? = null
+)
+
+data class AcceptInvitationRequest(
+    val token: String,
+    val name: String? = null,
+    val password: String? = null
+)
+
+data class InvitationPreviewDto(
+    val email: String,
+    val name: String,
+    val role: String,
+    val institutionName: String,
+    val status: String,
+    val expired: Boolean
+)
+

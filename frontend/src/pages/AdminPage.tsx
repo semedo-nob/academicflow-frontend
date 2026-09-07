@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { ADMIN_SECTIONS } from '../data/mockData';
 import { useApp } from '../context/AppContext';
+import { useFeedback } from '../context/FeedbackContext';
 import { useAsyncData } from '../hooks/useAsyncData';
 import { adminService, auditService, organizationService, userService } from '../services';
 import { adminSectionsFor, isSuperAdmin, type AdminSection } from '../lib/access';
@@ -55,38 +56,47 @@ function AuditDrawer({ onClose }: { onClose: () => void }) {
 
 function UsersDrawer({ onClose }: { onClose: () => void }) {
   const { user } = useApp();
+  const { error: notifyError, success } = useFeedback();
   const [tick, setTick] = useState(0);
   const { data: users, loading } = useAsyncData(() => userService.list(), [], [tick]);
+  const { data: invitations } = useAsyncData(() => userService.invitations(), [], [tick]);
   const { data: roles } = useAsyncData(() => adminService.roles(), [], []);
   const { data: orgs } = useAsyncData(() => organizationService.list(), [], []);
   const [form, setForm] = useState({ name: '', email: '', role: 'VIEWER', organizationNodeId: '' });
   const [busy, setBusy] = useState(false);
+  const [lastInvitePath, setLastInvitePath] = useState<string | null>(null);
 
   const roleOptions = (roles.length ? roles : [{ code: 'VIEWER', name: 'Viewer' }]).filter(
     (r) => isSuperAdmin(user.role) || r.code !== 'SUPER_ADMIN',
   );
 
-  const create = async () => {
+  const invite = async () => {
+    if (!form.name.trim() || !form.email.trim()) {
+      notifyError('Name and email are required');
+      return;
+    }
     setBusy(true);
     try {
-      await userService.create({
-        name: form.name,
-        email: form.email,
+      const res = await userService.invite({
+        name: form.name.trim(),
+        email: form.email.trim(),
         role: form.role,
         organizationNodeId: form.organizationNodeId || null,
       });
       setForm({ name: '', email: '', role: 'VIEWER', organizationNodeId: '' });
+      setLastInvitePath(res.invitePath);
       setTick((t) => t + 1);
+      success(`Invitation created for ${res.email}`);
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : 'Could not create user');
+      notifyError(e instanceof Error ? e.message : 'Could not send invitation');
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <DrawerShell title="Users" onClose={onClose}>
-      <p className="section-sub">Assign roles for people in this institution.</p>
+    <DrawerShell title="Users & invitations" onClose={onClose}>
+      <p className="section-sub">Invite colleagues to this institution. They activate via the invite link.</p>
       {loading && <p className="section-sub">Loading…</p>}
       <div className="table-wrap" style={{ border: 'none' }}>
         <table>
@@ -139,8 +149,57 @@ function UsersDrawer({ onClose }: { onClose: () => void }) {
           </tbody>
         </table>
       </div>
+
       <div className="section-title" style={{ marginTop: 18 }}>
-        Add user
+        Pending invitations
+      </div>
+      {invitations.filter((i) => i.status === 'PENDING').length === 0 ? (
+        <p className="section-sub">No pending invitations.</p>
+      ) : (
+        <div className="table-wrap" style={{ border: 'none' }}>
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Invite link</th>
+              </tr>
+            </thead>
+            <tbody>
+              {invitations
+                .filter((i) => i.status === 'PENDING')
+                .map((i) => (
+                  <tr key={i.id}>
+                    <td>{i.name}</td>
+                    <td className="cell-sub">{i.email}</td>
+                    <td className="mono">{i.role}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="linkish"
+                        onClick={async () => {
+                          const url = `${window.location.origin}${i.invitePath}`;
+                          try {
+                            await navigator.clipboard.writeText(url);
+                            success('Invite link copied');
+                          } catch {
+                            notifyError(url);
+                          }
+                        }}
+                      >
+                        Copy link
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="section-title" style={{ marginTop: 18 }}>
+        Invite user
       </div>
       <div className="field">
         <label>Name</label>
@@ -161,21 +220,26 @@ function UsersDrawer({ onClose }: { onClose: () => void }) {
         </select>
       </div>
       <div className="field">
-        <label>Organization</label>
+        <label>Organization (optional)</label>
         <select
           value={form.organizationNodeId}
           onChange={(e) => setForm({ ...form, organizationNodeId: e.target.value })}
         >
-          <option value="">Default</option>
+          <option value="">None — assign later</option>
           {orgs.map((o) => (
             <option key={o.id} value={o.id}>
-              {o.name}
+              {o.name} ({o.type})
             </option>
           ))}
         </select>
       </div>
-      <Button variant="primary" disabled={busy || !form.name || !form.email} onClick={create}>
-        {busy ? 'Saving…' : 'Create user'}
+      {lastInvitePath && (
+        <p className="section-sub">
+          Last invite path: <span className="mono">{lastInvitePath}</span>
+        </p>
+      )}
+      <Button variant="primary" disabled={busy || !form.name || !form.email} onClick={() => void invite()}>
+        {busy ? 'Sending…' : 'Send invitation'}
       </Button>
     </DrawerShell>
   );

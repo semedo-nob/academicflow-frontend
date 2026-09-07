@@ -4,6 +4,7 @@ import { ORG_NODES } from '../data/mockData';
 import { organizationService } from '../services';
 import { useAsyncData } from '../hooks/useAsyncData';
 import { useApp } from '../context/AppContext';
+import { useFeedback } from '../context/FeedbackContext';
 import { canManageOrganization, isSuperAdmin } from '../lib/access';
 import { Button } from '../components/ui/Button';
 import { Tabs, PageHead, Card } from '../components/ui/Drawer';
@@ -63,6 +64,7 @@ function TreeNodes({
 export function OrganizationPage() {
   const navigate = useNavigate();
   const { user } = useApp();
+  const { error: notifyError, success } = useFeedback();
   const canEdit = canManageOrganization(user.role);
   const [tick, setTick] = useState(0);
   const { data: orgNodes, fromApi } = useAsyncData(() => organizationService.list(), ORG_NODES, [tick]);
@@ -89,8 +91,9 @@ export function OrganizationPage() {
       });
       setShowAdd(false);
       setTick((t) => t + 1);
+      success('Organization node created');
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : 'Failed');
+      notifyError(e instanceof Error ? e.message : 'Failed');
     } finally {
       setBusy(false);
     }
