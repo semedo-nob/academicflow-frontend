@@ -1,0 +1,9 @@
+# Local-only overrides (copy to application-local.properties — that file is gitignored)
+# Activate with: SPRING_PROFILES_ACTIVE=local
+
+spring.datasource.url=jdbc:postgresql://127.0.0.1:5434/academicflow
+spring.datasource.username=academicflow
+spring.datasource.password=academicflow
+
+academicflow.jwt-secret=local-dev-only-not-for-production
+academicflow.cors-allowed-origins=http://127.0.0.1:5173,http://localhost:5173

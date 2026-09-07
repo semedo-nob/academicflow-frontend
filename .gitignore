@@ -1,0 +1,58 @@
+# AcademicFlow monorepo — never commit secrets, deps, or build output
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+!**/.env.example
+backend/src/main/resources/application-local.properties
+backend/src/main/resources/application-*.local.properties
+*.pem
+*.p12
+*.jks
+*.key
+credentials*.json
+secrets/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs / temp
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/*.local
+frontend/.vite/
+frontend/coverage/
+
+# Backend
+backend/.gradle/
+backend/build/
+backend/out/
+backend/bin/
+backend/.kotlin/
+backend/*.iml
+backend/HELP.md
+
+# Prototypes / archives (not source)
+*.zip
+academicflow*.html
+!frontend/index.html
+
+# Agent / local tooling
+.cursor/
+.claude/
+agent-transcripts/

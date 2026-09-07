@@ -1,0 +1,205 @@
+.plat-shell {
+  display: flex;
+  min-height: 100vh;
+  background: #f4f6fb;
+  color: #1b2130;
+  font-family: Inter, system-ui, sans-serif;
+}
+.plat-sidebar {
+  width: 248px;
+  flex-shrink: 0;
+  background: #0f1528;
+  color: #aeb6cc;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 12px;
+}
+.plat-brand {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 4px 8px 18px;
+}
+.plat-brand-name {
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+}
+.plat-brand-sub {
+  font-size: 11px;
+  color: #6b7392;
+}
+.plat-nav {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.plat-nav-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #6b7392;
+  padding: 14px 10px 6px;
+}
+.plat-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  color: #aeb6cc;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.plat-nav-item svg {
+  width: 16px;
+  height: 16px;
+  opacity: 0.85;
+}
+.plat-nav-item:hover {
+  background: #1b233d;
+  color: #fff;
+}
+.plat-nav-item.active {
+  background: #232e4e;
+  color: #fff;
+}
+.plat-sidebar-foot {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  margin-top: 8px;
+  padding-top: 12px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.plat-user-name {
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.plat-user-role {
+  font-size: 11px;
+  color: #6b7392;
+}
+.plat-signout {
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: transparent;
+  color: #aeb6cc;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.plat-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.plat-topbar {
+  height: 64px;
+  background: #fff;
+  border-bottom: 1px solid #e3e7ed;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 28px;
+}
+.plat-eyebrow {
+  font-size: 11px;
+  color: #8a93a2;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.plat-top-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+.plat-top-meta {
+  font-size: 12.5px;
+  color: #5b6472;
+}
+.plat-content {
+  padding: 24px 28px 40px;
+  overflow: auto;
+}
+.plat-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.plat-kpi {
+  background: #fff;
+  border: 1px solid #e3e7ed;
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.plat-kpi-label {
+  font-size: 12px;
+  color: #8a93a2;
+  margin-bottom: 6px;
+}
+.plat-kpi-value {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.plat-panel {
+  background: #fff;
+  border: 1px solid #e3e7ed;
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+.plat-panel h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+.plat-health {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+.plat-health-item {
+  border: 1px solid #e3e7ed;
+  border-radius: 10px;
+  padding: 12px;
+}
+.plat-health-ok {
+  color: #1c8c5e;
+  font-weight: 700;
+  font-size: 12px;
+}
+.plat-health-bad {
+  color: #c13a2e;
+  font-weight: 700;
+  font-size: 12px;
+}
+.plat-attention {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.plat-attention li {
+  background: #fbf1df;
+  color: #7a4e08;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+@media (max-width: 1000px) {
+  .plat-kpi-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .plat-sidebar {
+    width: 210px;
+  }
+}
