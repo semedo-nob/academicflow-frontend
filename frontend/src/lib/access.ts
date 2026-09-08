@@ -43,10 +43,12 @@ export function homePath(role: Role | string): string {
 export type NavKey =
   | 'dashboard'
   | 'organization'
+  | 'onboarding'
   | 'lecturers'
   | 'units'
   | 'requests'
   | 'recommendations'
+  | 'allocate-context'
   | 'allocation'
   | 'workload'
   | 'timetable'
@@ -65,10 +67,12 @@ const ROLE_NAV: Record<Role, NavKey[]> = {
   INSTITUTION_ADMIN: [
     'dashboard',
     'organization',
+    'onboarding',
     'lecturers',
     'units',
     'requests',
     'recommendations',
+    'allocate-context',
     'allocation',
     'workload',
     'timetable',
@@ -96,6 +100,7 @@ const ROLE_NAV: Record<Role, NavKey[]> = {
     'units',
     'requests',
     'recommendations',
+    'allocate-context',
     'allocation',
     'workload',
     'timetable',
@@ -125,10 +130,12 @@ export function canAccessPath(role: Role | string, path: string): boolean {
   const known: NavKey[] = [
     'dashboard',
     'organization',
+    'onboarding',
     'lecturers',
     'units',
     'requests',
     'recommendations',
+    'allocate-context',
     'allocation',
     'workload',
     'timetable',
@@ -139,6 +146,7 @@ export function canAccessPath(role: Role | string, path: string): boolean {
     'admin',
   ];
   if (segment === 'profile') return true;
+  if (segment === 'onboarding') return normalizeRole(role) === 'INSTITUTION_ADMIN';
   if (!known.includes(segment as NavKey)) return true;
   return canAccessNav(role, segment as NavKey);
 }

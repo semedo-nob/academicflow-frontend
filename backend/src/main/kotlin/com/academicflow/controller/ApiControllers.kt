@@ -3,10 +3,13 @@ package com.academicflow.controller
 import com.academicflow.dto.*
 import com.academicflow.service.AcademicFlowService
 import com.academicflow.service.AdminConfigService
+import com.academicflow.service.CourseOfferingService
 import com.academicflow.service.ExportService
 import com.academicflow.service.FileImportService
+import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
+import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import org.springframework.web.multipart.MultipartFile
 import org.springframework.web.server.ResponseStatusException
@@ -18,7 +21,8 @@ class ApiControllers(
     private val service: AcademicFlowService,
     private val admin: AdminConfigService,
     private val fileImportService: FileImportService,
-    private val exportService: ExportService
+    private val exportService: ExportService,
+    private val courseOfferingService: CourseOfferingService
 ) {
 
     @PostMapping("/auth/login")
@@ -55,6 +59,13 @@ class ApiControllers(
         throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
     }
 
+    @GetMapping("/auth/me")
+    fun me() = try {
+        service.me()
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.UNAUTHORIZED, e.message)
+    }
+
     @GetMapping("/dashboard")
     fun dashboard() = service.dashboard()
 
@@ -82,9 +93,60 @@ class ApiControllers(
     @GetMapping("/requests")
     fun requests() = service.listRequests()
 
+    @GetMapping("/requests/{id}")
+    fun requestDetail(@PathVariable id: UUID) = try {
+        service.getRequestDetail(id)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    }
+
     @PostMapping("/requests")
     fun createRequest(@RequestBody req: CreateTeachingRequest) = try {
         service.createRequest(req)
+    } catch (e: IllegalArgumentException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    }
+
+    @PostMapping("/requests/{id}/respond")
+    fun respondToRequest(@PathVariable id: UUID, @RequestBody req: RespondTeachingRequest) = try {
+        service.respondToRequest(id, req)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    } catch (e: IllegalArgumentException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    } catch (e: IllegalStateException) {
+        throw ResponseStatusException(HttpStatus.FORBIDDEN, e.message)
+    }
+
+    @PostMapping("/requests/{id}/attachments", consumes = [MediaType.MULTIPART_FORM_DATA_VALUE])
+    fun uploadRequestAttachment(
+        @PathVariable id: UUID,
+        @RequestParam("file") file: MultipartFile,
+        @RequestParam(value = "docType", required = false) docType: String?
+    ) = try {
+        service.uploadRequestAttachment(id, file, docType)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    } catch (e: IllegalArgumentException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    }
+
+    @GetMapping("/request-attachments/{id}/download")
+    fun downloadRequestAttachment(@PathVariable id: UUID): ResponseEntity<ByteArray> = try {
+        val (attachment, bytes) = service.downloadRequestAttachment(id)
+        ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"${attachment.fileName}\"")
+            .contentType(MediaType.parseMediaType(attachment.contentType ?: "application/octet-stream"))
+            .body(bytes)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    }
+
+    @PostMapping("/requests/{id}/messages")
+    fun postRequestMessage(@PathVariable id: UUID, @RequestBody req: CreateRequestMessage) = try {
+        service.postRequestMessage(id, req)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
     } catch (e: IllegalArgumentException) {
         throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
     }
@@ -136,10 +198,17 @@ class ApiControllers(
 
     @PostMapping("/imports/upload", consumes = [MediaType.MULTIPART_FORM_DATA_VALUE])
     fun uploadImport(
-        @RequestPart("file") file: MultipartFile,
+        @RequestParam("file") file: MultipartFile,
         @RequestParam(required = false) entityType: String?
-    ) = try {
-        fileImportService.upload(file, entityType)
+    ) = fileImportService.upload(file, entityType)
+
+    @PostMapping("/imports/{id}/mapping")
+    fun updateImportMapping(@PathVariable id: UUID, @RequestBody req: UpdateImportMappingRequest) = try {
+        service.updateImportMapping(id, req)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    } catch (e: IllegalStateException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
     } catch (e: IllegalArgumentException) {
         throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
     }
@@ -149,6 +218,15 @@ class ApiControllers(
         service.advanceImportSession(id)
     } catch (e: NoSuchElementException) {
         throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    }
+
+    @PostMapping("/imports/{id}/reprocess")
+    fun reprocessImport(@PathVariable id: UUID) = try {
+        service.reprocessImportSession(id)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    } catch (e: IllegalStateException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
     }
 
     @GetMapping("/imports/{id}/rows")
@@ -186,6 +264,69 @@ class ApiControllers(
         @PathVariable format: String
     ) = try {
         exportService.export(kind, format)
+    } catch (e: IllegalArgumentException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    }
+
+    @GetMapping("/course-offerings")
+    fun courseOfferings() = courseOfferingService.listOfferings()
+
+    @GetMapping("/course-offerings/{id}")
+    fun courseOffering(@PathVariable id: UUID) = try {
+        courseOfferingService.getOffering(id)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    }
+
+    @PostMapping("/course-offerings")
+    fun createCourseOffering(@RequestBody req: CreateCourseOfferingRequest) = try {
+        courseOfferingService.createOffering(req)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    } catch (e: IllegalArgumentException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    }
+
+    @PutMapping("/course-offerings/{id}/requirements")
+    fun replaceRequirements(@PathVariable id: UUID, @RequestBody body: List<RequirementInputDto>) = try {
+        courseOfferingService.replaceRequirements(id, body)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    }
+
+    @PostMapping("/course-offerings/{id}/outline", consumes = [MediaType.MULTIPART_FORM_DATA_VALUE])
+    fun uploadOutline(
+        @PathVariable id: UUID,
+        @RequestParam("file") file: MultipartFile
+    ) = try {
+        courseOfferingService.uploadOutline(id, file)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    }
+
+    @GetMapping("/course-outlines/{id}/download")
+    fun downloadOutline(@PathVariable id: UUID): ResponseEntity<ByteArray> = try {
+        val (outline, bytes) = courseOfferingService.downloadOutline(id)
+        ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"${outline.fileName}\"")
+            .contentType(MediaType.parseMediaType(outline.contentType ?: "application/octet-stream"))
+            .body(bytes)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    }
+
+    @GetMapping("/course-offerings/{id}/suitability")
+    fun suitability(@PathVariable id: UUID) = try {
+        courseOfferingService.suitabilityForOffering(id)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    }
+
+    @PostMapping("/course-offerings/allocate")
+    fun allocateOffering(@RequestBody req: AllocateFromOfferingRequest) = try {
+        courseOfferingService.allocateFromOffering(req)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
     } catch (e: IllegalArgumentException) {
         throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
     }
@@ -292,6 +433,27 @@ class AdminControllers(private val admin: AdminConfigService, private val servic
     @PutMapping("/users/{id}")
     fun updateUser(@PathVariable id: UUID, @RequestBody req: UpdateUserRequest) = try {
         admin.updateUser(id, req)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    }
+
+    @GetMapping("/memberships")
+    fun memberships(@RequestParam(required = false) departmentId: UUID?) = admin.listMemberships(departmentId)
+
+    @PostMapping("/memberships")
+    fun createMembership(@RequestBody req: CreateMembershipRequest) = try {
+        admin.createMembership(req)
+    } catch (e: IllegalArgumentException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    }
+
+    @PostMapping("/departments/assign-chair")
+    fun assignChair(@RequestBody req: AssignChairRequest) = try {
+        admin.assignDepartmentChair(req)
+    } catch (e: IllegalArgumentException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
     } catch (e: NoSuchElementException) {
         throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
     }

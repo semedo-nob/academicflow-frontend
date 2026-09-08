@@ -10,6 +10,7 @@ import { Button } from '../components/ui/Button';
 import { Tabs, PageHead, Card } from '../components/ui/Drawer';
 import { FormActions, Modal } from '../components/ui/Modal';
 import { IconBuilding, IconFolder } from '../components/ui/Icons';
+import { SuggestInput } from '../components/ui/SuggestInput';
 import type { OrganizationNode } from '../types';
 
 function buildTree(nodes: OrganizationNode[]) {
@@ -74,7 +75,7 @@ export function OrganizationPage() {
   const [tab, setTab] = useState(0);
   const [showAdd, setShowAdd] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({ name: '', type: 'Department', parentId: '' });
+  const [form, setForm] = useState({ name: '', type: 'Department', parent: '' });
 
   const effectiveId = orgNodes.some((n) => n.id === selectedId) ? selectedId : defaultId;
   const selected = orgNodes.find((n) => n.id === effectiveId) || orgNodes[0];
@@ -82,14 +83,19 @@ export function OrganizationPage() {
   if (!selected) return null;
 
   const save = async () => {
+    if (!form.name.trim()) {
+      notifyError('Enter a name');
+      return;
+    }
     setBusy(true);
     try {
       await organizationService.create({
-        name: form.name,
-        type: form.type,
-        parentId: form.parentId || selected.id,
+        name: form.name.trim(),
+        type: form.type.trim() || 'Department',
+        parentName: form.parent.trim() || selected.name,
       });
       setShowAdd(false);
+      setForm({ name: '', type: 'Department', parent: '' });
       setTick((t) => t + 1);
       success('Organization node created');
     } catch (e) {
@@ -241,26 +247,26 @@ export function OrganizationPage() {
         </div>
         <div className="field">
           <label>Type</label>
-          <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
-            <option>University</option>
-            <option>School</option>
-            <option>Faculty</option>
-            <option>College</option>
-            <option>Department</option>
-            <option>Division</option>
-            <option>Section</option>
-          </select>
+          <SuggestInput
+            id="org-type"
+            value={form.type}
+            onChange={(v) => setForm({ ...form, type: v })}
+            options={['University', 'School', 'Faculty', 'College', 'Department', 'Division', 'Section'].map((t) => ({
+              value: t,
+              label: t,
+            }))}
+            placeholder="Type node type…"
+          />
         </div>
         <div className="field">
           <label>Parent</label>
-          <select value={form.parentId} onChange={(e) => setForm({ ...form, parentId: e.target.value })}>
-            <option value="">Under selected ({selected.name})</option>
-            {orgNodes.map((n) => (
-              <option key={n.id} value={n.id}>
-                {n.name} ({n.type})
-              </option>
-            ))}
-          </select>
+          <SuggestInput
+            id="org-parent"
+            value={form.parent}
+            onChange={(v) => setForm({ ...form, parent: v })}
+            options={orgNodes.map((n) => ({ value: n.id, label: `${n.name} (${n.type})` }))}
+            placeholder={`Under ${selected.name} — or type another parent`}
+          />
         </div>
       </Modal>
     </>

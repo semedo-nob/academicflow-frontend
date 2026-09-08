@@ -45,6 +45,16 @@ class MatchingService(
             .filter { it.isNotEmpty() }
 
         val lecturers = lecturerRepo.findByTenantIdOrderByFullNameAsc(tenantId)
+            .let { all ->
+                val preferred = request.preferredDepartmentId
+                if (preferred == null) all
+                else {
+                    val inPreferred = all.filter { it.organizationNodeId == preferred }
+                    // Prefer source-department staff; keep others as lower-ranked cross-dept options
+                    if (inPreferred.isNotEmpty()) inPreferred + all.filter { it.organizationNodeId != preferred }
+                    else all
+                }
+            }
         val allExpertise = expertiseRepo.findByTenantId(tenantId).groupBy { it.lecturerId }
         val orgs = orgRepo.findByTenantIdOrderByNameAsc(tenantId).associateBy { it.id }
 
@@ -52,8 +62,19 @@ class MatchingService(
         candidateRepo.flush()
 
         val scored = lecturers.mapNotNull { lecturer ->
-            scoreLecturer(request, lecturer, allExpertise[lecturer.id].orEmpty(), required, orgs[lecturer.organizationNodeId]?.name)
-        }.sortedByDescending { it.matchScore }
+            scoreLecturer(
+                request,
+                lecturer,
+                allExpertise[lecturer.id].orEmpty(),
+                required,
+                orgs[lecturer.organizationNodeId]?.name
+            )
+        }.sortedWith(
+            compareByDescending<RequestCandidate> {
+                request.preferredDepartmentId != null &&
+                    lecturers.firstOrNull { l -> l.id == it.lecturerId }?.organizationNodeId == request.preferredDepartmentId
+            }.thenByDescending { it.matchScore }
+        )
 
         val saved = scored.mapIndexed { index, c ->
             c.rankNo = index + 1
@@ -181,8 +202,16 @@ class MatchingService(
             if ((levelScore[bestLevel] ?: 0) >= 85) base else base - 8
         }
 
-        val policyOk = true
-        val policyPts = 100.0
+        val policyOk = request.preferredDepartmentId == null ||
+            lecturer.organizationNodeId == request.preferredDepartmentId ||
+            lecturer.organizationNodeId == request.requestingDepartmentId
+        val inPreferred = request.preferredDepartmentId == null ||
+            lecturer.organizationNodeId == request.preferredDepartmentId
+        val policyPts = when {
+            inPreferred -> 100.0
+            policyOk -> 72.0
+            else -> 40.0
+        }
 
         val slots = timetableRepo.findByTenantIdAndLecturerId(tenantId, lecturer.id)
         val noConflict = slots.groupBy { it.dayOfWeek }.values.none { daySlots ->
@@ -208,7 +237,11 @@ class MatchingService(
         if (available) reasons += "Available during requested period"
         if (workloadOk) reasons += "Within workload limit"
         if (noConflict) reasons += "No timetable conflict"
-        if (policyOk) reasons += "Eligible for cross-department teaching"
+        if (inPreferred && request.preferredDepartmentId != null) {
+            reasons += "Belongs to the preferred / source department"
+        } else if (policyOk) {
+            reasons += "Eligible for cross-department teaching"
+        }
 
         val warning = when {
             !workloadOk -> "Currently over or at their maximum workload"

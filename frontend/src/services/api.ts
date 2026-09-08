@@ -8,6 +8,17 @@ export function resolveTenantId(): string {
   return DEFAULT_TENANT;
 }
 
+export function resolveActiveDepartmentId(): string | null {
+  const stored = localStorage.getItem('af_active_department');
+  if (stored && /^[0-9a-fA-F-]{36}$/.test(stored)) return stored;
+  return null;
+}
+
+export function setActiveDepartmentId(id: string | null) {
+  if (id) localStorage.setItem('af_active_department', id);
+  else localStorage.removeItem('af_active_department');
+}
+
 function resolveUserEmail(): string {
   try {
     const raw = localStorage.getItem('af_user');
@@ -26,6 +37,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   };
   const email = resolveUserEmail();
   if (email) headers['X-User-Email'] = email;
+  const dept = resolveActiveDepartmentId();
+  if (dept) headers['X-Active-Department-Id'] = dept;
   if (!(options.body instanceof FormData)) {
     headers['Content-Type'] = headers['Content-Type'] || 'application/json';
   }
@@ -35,8 +48,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   });
   if (!res.ok) {
     let message = res.statusText;
+    let code: string | undefined;
     try {
       const body = await res.json();
+      code = body.code;
       message = body.message || body.detail || body.error || JSON.stringify(body);
     } catch {
       try {
@@ -45,7 +60,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
         /* ignore */
       }
     }
-    throw new Error(message || `Request failed (${res.status})`);
+    const err = new Error(message || `Request failed (${res.status})`) as Error & { code?: string; status?: number };
+    err.code = code;
+    err.status = res.status;
+    throw err;
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
@@ -72,6 +90,8 @@ export const api = {
     const headers: Record<string, string> = { 'X-Tenant-Id': resolveTenantId() };
     const email = resolveUserEmail();
     if (email) headers['X-User-Email'] = email;
+    const dept = resolveActiveDepartmentId();
+    if (dept) headers['X-Active-Department-Id'] = dept;
     const res = await fetch(`${API_BASE}${path}`, { headers });
     if (!res.ok) {
       let message = res.statusText;

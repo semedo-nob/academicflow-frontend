@@ -36,7 +36,8 @@ data class CreateLecturerRequest(
     val staffNumber: String,
     val name: String,
     val email: String,
-    val departmentId: UUID,
+    val departmentId: UUID? = null,
+    val department: String? = null,
     val qualifications: String? = null,
     val maximumWorkload: BigDecimal = BigDecimal("12"),
     val availability: String? = null,
@@ -59,7 +60,8 @@ data class AcademicUnitDto(
 data class CreateUnitRequest(
     val code: String,
     val name: String,
-    val sourceDepartmentId: UUID,
+    val sourceDepartmentId: UUID? = null,
+    val sourceDepartment: String? = null,
     val contactHours: BigDecimal = BigDecimal("3"),
     val studentCount: Int = 0,
     val requiredExpertise: List<String> = emptyList()
@@ -77,16 +79,78 @@ data class TeachingRequestDto(
     val contactHours: BigDecimal,
     val requiredExpertise: String?,
     val status: String,
-    val createdAt: Instant
+    val createdAt: Instant,
+    val courseOfferingId: UUID? = null,
+    val createdBy: UUID? = null,
+    /** Relative to the signed-in chair: outgoing = my dept asked; incoming = my dept is preferred source. */
+    val direction: String? = null,
+    val briefingNote: String? = null,
+    val attachmentCount: Int = 0,
+    val messageCount: Int = 0
 )
 
 data class CreateTeachingRequest(
-    val requestingDepartmentId: UUID,
-    val preferredDepartmentId: UUID?,
-    val academicUnitId: UUID,
+    val requestingDepartmentId: UUID? = null,
+    val requestingDepartment: String? = null,
+    val preferredDepartmentId: UUID? = null,
+    val preferredDepartment: String? = null,
+    val academicUnitId: UUID? = null,
+    val academicUnit: String? = null,
     val studentCount: Int,
     val contactHours: BigDecimal,
-    val requiredExpertise: String?
+    val requiredExpertise: String?,
+    val programme: String? = null,
+    val contextLabel: String? = null,
+    val createOffering: Boolean = true,
+    /** Initial note shared with the source department (outline context, constraints, etc.). */
+    val briefingNote: String? = null
+)
+
+data class RespondTeachingRequest(
+    val action: String, // ACCEPT | DECLINE
+    val note: String? = null
+)
+
+data class RequestAttachmentDto(
+    val id: UUID,
+    val teachingRequestId: UUID,
+    val fileName: String,
+    val contentType: String?,
+    val fileSizeBytes: Long?,
+    val docType: String,
+    val uploadedByName: String?,
+    val departmentName: String?,
+    val createdAt: Instant
+)
+
+data class RequestMessageDto(
+    val id: UUID,
+    val teachingRequestId: UUID,
+    val authorName: String?,
+    val authorRole: String?,
+    val authorDepartmentName: String?,
+    val messageType: String,
+    val body: String,
+    val relatedLecturerId: UUID?,
+    val relatedLecturerName: String?,
+    val notifyAuthority: Boolean,
+    val createdAt: Instant,
+    val mine: Boolean = false
+)
+
+data class CreateRequestMessage(
+    val body: String,
+    /** COMMENT | ELIGIBILITY_NOTE | AUTHORITY_NOTICE */
+    val messageType: String = "COMMENT",
+    val relatedLecturerId: UUID? = null,
+    val relatedLecturerName: String? = null,
+    val notifyAuthority: Boolean = false
+)
+
+data class TeachingRequestDetailDto(
+    val request: TeachingRequestDto,
+    val attachments: List<RequestAttachmentDto>,
+    val messages: List<RequestMessageDto>
 )
 
 data class CandidateDto(
@@ -110,7 +174,12 @@ data class CreateAllocationRequest(
     val teachingRequestId: UUID? = null,
     val matchScore: BigDecimal? = null,
     val overrideReason: String? = null,
-    val recommendedLecturerId: UUID? = null
+    val recommendedLecturerId: UUID? = null,
+    val courseOfferingId: UUID? = null,
+    val suitabilityScore: BigDecimal? = null,
+    val suitabilityBreakdown: String? = null,
+    val decisionType: String? = null,
+    val decisionNote: String? = null
 )
 
 data class AllocationDto(
@@ -154,7 +223,10 @@ data class DashboardDto(
     val crossDeptRequests: Long,
     val completionPct: Int,
     val recentRequests: List<TeachingRequestDto>,
-    val recentActivity: List<AuditLogDto>
+    val recentActivity: List<AuditLogDto>,
+    val scopeDepartmentId: UUID? = null,
+    val scopeDepartmentName: String? = null,
+    val scopeRole: String? = null
 )
 
 data class AuditLogDto(
@@ -169,16 +241,8 @@ data class AuditLogDto(
 data class CreateOrgNodeRequest(
     val name: String,
     val type: String,
-    val parentId: UUID? = null
-)
-
-data class ImportSessionDto(
-    val id: UUID,
-    val fileName: String,
-    val entityType: String,
-    val status: String,
-    val columnMap: String?,
-    val createdAt: Instant
+    val parentId: UUID? = null,
+    val parentName: String? = null
 )
 
 data class UserDto(
@@ -258,8 +322,22 @@ data class RuleDto(val id: UUID, val key: String, val value: String, val descrip
 data class UpdateRuleRequest(val value: String)
 data class SettingDto(val id: UUID, val key: String, val value: String, val description: String?)
 data class UpdateSettingRequest(val value: String)
-data class MappingProfileDto(val id: UUID, val name: String, val entityType: String, val columnMap: Map<String, String>)
-data class CreateMappingProfileRequest(val name: String, val entityType: String, val columnMap: Map<String, String>)
+data class MappingProfileDto(
+    val id: UUID,
+    val name: String,
+    val entityType: String,
+    val columnMap: Map<String, String>,
+    val mappingVersion: Int = 1,
+    val fileFormat: String? = null,
+    val notes: String? = null
+)
+data class CreateMappingProfileRequest(
+    val name: String,
+    val entityType: String,
+    val columnMap: Map<String, String>,
+    val fileFormat: String? = null,
+    val notes: String? = null
+)
 data class PeriodContextDto(
     val academicYear: AcademicYearDto?,
     val semester: SemesterDto?,
@@ -274,6 +352,33 @@ data class CreateImportSessionRequest(
     val rows: List<Map<String, String>> = emptyList()
 )
 
+data class ColumnMappingSuggestionDto(
+    val sourceColumn: String,
+    val targetField: String?,
+    val confidence: Double,
+    val method: String,
+    val sampleValues: List<String> = emptyList(),
+    val unmapped: Boolean = false
+)
+
+data class UpdateImportMappingRequest(
+    val columnMap: Map<String, String>,
+    val entityType: String? = null,
+    val ignoredColumns: List<String> = emptyList(),
+    val saveAsProfileName: String? = null
+)
+
+data class ImportResultSummaryDto(
+    val allocations: Int = 0,
+    val lecturers: Int = 0,
+    val units: Int = 0,
+    val warnings: Int = 0,
+    val errors: Int = 0,
+    val duplicatesSkipped: Int = 0,
+    val unmappedFields: Int = 0,
+    val details: List<String> = emptyList()
+)
+
 data class ImportUploadResultDto(
     val sessionId: java.util.UUID,
     val fileName: String,
@@ -281,9 +386,23 @@ data class ImportUploadResultDto(
     val status: String,
     val detectedColumns: List<String>,
     val suggestedMap: Map<String, String>,
+    val mappingSuggestions: List<ColumnMappingSuggestionDto> = emptyList(),
+    val unmappedColumns: List<String> = emptyList(),
+    val canonicalFields: List<String> = emptyList(),
+    val profileApplied: String? = null,
     val rowCount: Int,
     val preview: List<Map<String, String>>,
     val warnings: List<String> = emptyList()
+)
+
+data class ImportSessionDto(
+    val id: UUID,
+    val fileName: String,
+    val entityType: String,
+    val status: String,
+    val columnMap: String?,
+    val createdAt: Instant,
+    val resultSummary: ImportResultSummaryDto? = null
 )
 
 data class SearchHitDto(
@@ -298,7 +417,42 @@ data class SearchResultDto(val hits: List<SearchHitDto>)
 
 data class LoginRequest(val email: String, val password: String? = null)
 
-data class LoginResponse(val email: String, val name: String, val role: String, val tenantId: UUID)
+data class MembershipDto(
+    val id: UUID,
+    val organizationNodeId: UUID,
+    val organizationName: String,
+    val organizationType: String,
+    val role: String,
+    val isPrimary: Boolean
+)
+
+data class LoginResponse(
+    val email: String,
+    val name: String,
+    val role: String,
+    val tenantId: UUID,
+    val userId: UUID? = null,
+    val organizationNodeId: UUID? = null,
+    val departmentName: String? = null,
+    val activeDepartmentId: UUID? = null,
+    val activeDepartmentName: String? = null,
+    val activeRole: String? = null,
+    val memberships: List<MembershipDto> = emptyList()
+)
+
+data class AssignChairRequest(
+    val userId: UUID? = null,
+    val email: String? = null,
+    val departmentId: UUID? = null,
+    val department: String? = null
+)
+
+data class CreateMembershipRequest(
+    val userId: UUID,
+    val organizationNodeId: UUID,
+    val role: String,
+    val isPrimary: Boolean = false
+)
 
 data class TimetableEntryDto(
     val id: UUID,
@@ -368,7 +522,8 @@ data class CreateInvitationRequest(
     val email: String,
     val name: String,
     val role: String,
-    val organizationNodeId: UUID? = null
+    val organizationNodeId: UUID? = null,
+    val organization: String? = null
 )
 
 data class AcceptInvitationRequest(
@@ -384,5 +539,99 @@ data class InvitationPreviewDto(
     val institutionName: String,
     val status: String,
     val expired: Boolean
+)
+
+data class CourseOfferingDto(
+    val id: UUID,
+    val academicUnitId: UUID,
+    val unitCode: String,
+    val unitName: String,
+    val programme: String?,
+    val contextLabel: String?,
+    val levelLabel: String?,
+    val displayTitle: String?,
+    val requestingDepartment: String?,
+    val owningDepartment: String?,
+    val status: String
+)
+
+data class CourseRequirementDto(
+    val id: UUID,
+    val type: String,
+    val label: String,
+    val weight: java.math.BigDecimal,
+    val source: String
+)
+
+data class CourseOutlineDto(
+    val id: UUID,
+    val fileName: String,
+    val contentType: String?,
+    val detectedContentType: String? = null,
+    val fileExtension: String? = null,
+    val fileSizeBytes: Long? = null,
+    val checksumSha256: String? = null,
+    val versionNo: Int,
+    val extractionConfidence: java.math.BigDecimal,
+    val needsReview: Boolean,
+    val processingStatus: String = "UPLOADED",
+    val extractionMethod: String? = null,
+    val processingMessage: String? = null,
+    val processingErrorCode: String? = null,
+    val createdAt: String,
+    val hasFile: Boolean,
+    val warnings: List<String> = emptyList()
+)
+
+data class CourseOfferingDetailDto(
+    val offering: CourseOfferingDto,
+    val requirements: List<CourseRequirementDto>,
+    val outlines: List<CourseOutlineDto>
+)
+
+data class RequirementInputDto(
+    val type: String,
+    val label: String,
+    val weight: java.math.BigDecimal? = null
+)
+
+data class CreateCourseOfferingRequest(
+    val academicUnitId: UUID,
+    val programme: String? = null,
+    val contextLabel: String? = null,
+    val levelLabel: String? = null,
+    val displayTitle: String? = null,
+    val academicYearId: UUID? = null,
+    val semesterId: UUID? = null,
+    val requestingDepartmentId: UUID? = null,
+    val owningDepartmentId: UUID? = null,
+    val requirements: List<RequirementInputDto> = emptyList()
+)
+
+data class SuitabilityBreakdownDto(
+    val key: String,
+    val label: String,
+    val earned: Double,
+    val max: Double
+)
+
+data class SuitabilityCandidateDto(
+    val lecturerId: UUID,
+    val name: String,
+    val department: String,
+    val score: Int,
+    val classification: String,
+    val positives: List<String>,
+    val warnings: List<String>,
+    val missingEvidence: List<String>,
+    val breakdown: List<SuitabilityBreakdownDto>,
+    val crossDepartment: Boolean,
+    val load: String
+)
+
+data class AllocateFromOfferingRequest(
+    val courseOfferingId: UUID,
+    val lecturerId: UUID,
+    val decisionNote: String? = null
 )
 

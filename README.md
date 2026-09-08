@@ -1,116 +1,116 @@
 # AcademicFlow
 
-Proprietary software for multi-tenant academic teaching allocation.
+**Multi-tenant teaching allocation for universities** — request lecturers across departments, match by expertise and workload, import allocation timetables, and publish approved teaching loads.
 
-AcademicFlow manages cross-department teaching requests, lecturer matching, allocation, conflict resolution, approvals, workload, and published timetables. The product is delivered as a monorepo: a React SPA and a Spring Boot / Kotlin API over PostgreSQL.
+AcademicFlow is a monorepo: a React SPA and a Spring Boot / Kotlin API over PostgreSQL.
 
 **Status:** private repository. Viewing source does not grant rights to use, copy, modify, distribute, or deploy this software. See [License](#license).
 
 ---
 
-## Repository contents (as of `main`)
+## What problem it solves
 
-This repository is a monorepo. Both applications are present and tracked on `origin/main`.
+Universities routinely need **Department A** to borrow teaching capacity from **Department B**. That hand-off today is email, spreadsheets, and informal negotiation. AcademicFlow turns it into a controlled workflow:
 
-### Frontend (`frontend/`)
+1. Institution registers and is approved by the platform owner  
+2. Admin creates departments and assigns **one chair account per department**  
+3. Chair A requests a lecturer from Chair B, attaches a **course outline**, and both sides **message** (eligibility notes, authority notices)  
+4. B accepts → matching ranks candidates by **expertise + workload**  
+5. Chairs **import** their department allocation timetable (CSV / Excel / scanned PDF + OCR)  
+6. Unallocated units open **Allocate by context** for suitability-aware assignment  
+7. Conflicts → approvals → timetable / export  
 
-| Area | Contents |
-|---|---|
-| Stack | React 19, TypeScript, Vite 8, React Router 7 |
-| Institution UI | Dashboard, organization, lecturers, units, requests, recommendations, allocation, conflicts, approvals, workload, timetable, reports, import, admin, profile, login / invite accept |
-| Platform UI | Separate Super Admin shell and routes under `/platform/*` (command center, customers, accounts, security, config, health) |
-| Shared | App / platform layouts, topbar + sidebar, feedback (snackbars / dialogs), access helpers, ⌘K navigation search |
-| Services | Institution REST client (`api.ts`, domain services) and platform client (`platformApi.ts`) |
-| Deploy | `vercel.json` SPA rewrites |
-
-### Backend (`backend/`)
-
-| Area | Contents |
-|---|---|
-| Stack | Spring Boot 4, Kotlin, JPA, Flyway, PostgreSQL, PDFBox (import) |
-| Domain API | Controllers and services for organization, lecturers, units, requests, matching, allocation, conflicts, approvals, workload, timetable, export, import, admin config, invitations |
-| Platform API | `/api/platform/**` with `PlatformAuthFilter` (Super Admin only) |
-| Tenancy | `TenantContext` and `tenant_id` isolation |
-| Schema | Flyway `V1`–`V7` (core schema, seed, admin config, roles, institution signup, platform command center, invitations) |
-| Ops | Dockerfile, Gradle wrapper, `application-dev.properties`, local properties example |
-
-### Supporting
-
-| Path | Purpose |
-|---|---|
-| `docs/` | Developer, user, Super Admin, security, and deployment guides |
-| `docker-compose.yml` | Local PostgreSQL |
-| `.env.example` | Environment placeholders (no secrets) |
+```text
+Register → Onboard chairs → Request (+ docs / thread) → Accept
+       → Match / Allocate by context → Board → Approve → Timetable
+```
 
 ---
 
-## Product model
+## Who uses it
 
-```text
-Request → Match → Allocate → Conflicts → Approve → Timetable / export
-```
+| Role | Surface | Typical work |
+|------|---------|--------------|
+| **Super Admin** | `/platform/*` | Approve institutions, platform health, flags, support |
+| **Institution Admin** | Institution app | Org tree, onboarding chairs, users, full teaching ops |
+| **Department Chair** | Institution app (scoped) | Own dept’s lecturers/units/import; cross-dept requests & replies |
+| **School Dean / Lecturer / Viewer** | Limited nav | Oversight or read-only views as permitted |
 
-Two operational surfaces:
+Frontend route gates are **not** the security boundary. The API enforces tenant + department scope.
 
-1. **Institution workspace** — teaching operations for a single tenant (department chairs, admins, lecturers as applicable).
-2. **Platform (Super Admin)** — product-owner console for customer lifecycle, platform accounts, security events, feature flags, health, and support lookup. This is not a university “super user” role inside one campus.
+---
 
-Institution callers are rejected on platform APIs. Frontend route gates are not the security boundary.
+## Product capabilities
+
+### Institution setup
+- Public **institution registration** → pending until Super Admin approval  
+- Guided **post-approval onboarding**: create departments → invite one chair each  
+- Organization hierarchy (university / school / department)  
+- Invitations (copy link) and **assign department chair** (one active chair per department)
+
+### Cross-department teaching
+- Teaching requests with preferred source department  
+- Incoming / Outgoing views for chairs  
+- Accept / Decline with notes on a shared **request thread**  
+- Attach **course outlines** and supporting documents  
+- Bidirectional messages: comments, **eligibility notes** (“only eligible for this unit”), **notify academic authority**  
+- Optional auto-created **course offering** for allocate-by-context
+
+### Matching & allocation
+- Scored recommendations (expertise, availability, workload, policy)  
+- **Allocate by context** — suitability engine (topics, outline evidence, workload, cross-dept flag)  
+- Allocation board, conflicts, approvals, workload, timetable, export
+
+### Import / data
+- CSV, TSV, Excel, PDF (text + **OCR** for scanned allocation sheets)  
+- Column mapping profiles, validate, preview, commit  
+- **Chair-scoped import**: commits only to the chair’s department; other-dept rows skipped with warnings  
+- Post-import bridge to unallocated units and allocate-by-context
+
+### Platform (product owner)
+- Customer lifecycle (approve / suspend / archive)  
+- Aggregate KPIs, security events, feature flags, health, support lookup  
 
 ---
 
 ## Architecture
 
 ```text
-Internet → Frontend (Vercel) → HTTPS → API (VPS / Nginx) → PostgreSQL (private)
+Browser (Vite / Vercel)
+        │  HTTPS
+        ▼
+   Spring Boot API  ──►  PostgreSQL (private)
+        │
+   Flyway migrations V1–V12
 ```
 
 ```text
 academicflow/
-├── frontend/          # SPA — institution + platform
-├── backend/           # REST API + Flyway migrations
-├── docs/
-├── docker-compose.yml
+├── frontend/                 # React 19 + TypeScript + Vite institution + platform UI
+├── backend/                  # Spring Boot 4 + Kotlin + JPA + Flyway
+├── docs/                     # Guides (developer, user, platform, deploy, security)
+├── docker-compose.yml        # Local PostgreSQL 16
 ├── .env.example
 ├── LICENSE
 └── README.md
 ```
 
-| Layer | Technology |
-|---|---|
-| Frontend | React 19, TypeScript, Vite, React Router |
-| Backend | Spring Boot, Kotlin, Spring Data JPA, Flyway, Validation, Actuator |
+| Layer | Stack |
+|-------|--------|
+| Frontend | React 19, TypeScript, Vite 8, React Router 7 |
+| Backend | Spring Boot 4, Kotlin, Spring Data JPA, Flyway, Actuator |
 | Database | PostgreSQL 16 |
-| Import | CSV / PDF parsing (Apache PDFBox) |
+| Documents | PDFBox; optional Tesseract OCR (local or Docker image) |
+
+**Tenancy:** every domain row is keyed by `tenant_id`. Institution calls send `X-Tenant-Id`.  
+**Department scope:** chairs send optional `X-Active-Department-Id`; `ScopeService` filters lists and mutations.  
+**Auth (current):** demo header auth (`X-User-Email`). Replace with JWT/session before production — see `docs/SECURITY.md`.
 
 ---
 
-## Capabilities
+## Quick start (local)
 
-### Institution
-
-- Organization hierarchy (schools / departments)
-- Lecturers, expertise, and workload limits
-- Academic units with academic year / semester / year-of-study context
-- Cross-department teaching requests (explicit department selection; no hardcoded CS/Math defaults)
-- Scored lecturer recommendations with override and recorded reason
-- Allocation board, conflict handling, approval workflow
-- Timetable and export after publish
-- File import with mapping, validation, commit, and progress feedback
-- User invitations and accept flow
-- In-app notifications and confirmations; command search for navigation
-
-### Platform (product owner)
-
-- Aggregate KPIs and operational overview
-- Customer request → review → approve / suspend / archive
-- Platform accounts and security event visibility
-- Feature flags and global configuration
-- Health, data-quality, and support lookup surfaces
-
----
-
-## Local development
+**Requirements:** JDK 17+, Node 20+, Docker, Git.
 
 ```bash
 git clone git@github.com:semedo-nob/academicflow-frontend.git
@@ -119,41 +119,70 @@ cd academicflow-frontend
 cp .env.example .env
 docker compose up -d db
 
+# API — http://127.0.0.1:8081  (health: /actuator/health)
 cd backend && SPRING_PROFILES_ACTIVE=dev ./gradlew bootRun
-# API: http://127.0.0.1:8081/api
 
+# UI — http://127.0.0.1:5173  (Vite proxies /api → 8081)
 cd ../frontend && npm ci && npm run dev
-# UI:  http://127.0.0.1:5173
 ```
 
-Demo credentials (local / demo auth only):
+### Demo accounts (local / `dev` profile only)
 
 | Role | Email | Password |
-|---|---|---|
-| Department chair | `j.wanjiku@uonbi.ac.ke` | any (demo mode) |
+|------|-------|----------|
+| CS Department Chair | `j.wanjiku@uonbi.ac.ke` | any (demo mode) |
+| Maths Department Chair | `m.otieno@uonbi.ac.ke` | any (demo mode) |
 | Super Admin | `admin@uonbi.ac.ke` | any (demo mode) |
 
-Production deployments must replace demo auth with proper session or JWT authentication. See `docs/SECURITY.md` and `docs/DEPLOYMENT.md`.
+Demo tenant id: `11111111-1111-1111-1111-111111111111` (also the frontend default when none is stored).
+
+---
+
+## Suggested walkthrough
+
+1. **Platform** — sign in as Super Admin → `/platform` → approve a pending institution (or use the seeded demo tenant).  
+2. **Onboarding** — as Institution Admin → `/onboarding` → add departments → invite chairs → copy invite links.  
+3. **Request** — CS chair → Teaching Requests → New request to Mathematics → attach outline + briefing → submit.  
+4. **Reply** — Maths chair → Incoming → **Open thread** → eligibility / authority messages → Accept.  
+5. **Match** — Find candidates or **Allocate by context**.  
+6. **Import** — Chair → Import → upload department timetable → commit (other departments rejected) → open unallocated units / allocate-by-context.
+
+---
+
+## API surface (high level)
+
+| Area | Examples |
+|------|----------|
+| Auth | `POST /api/auth/login`, register institution, invitations |
+| Core | lecturers, academic-units, requests, allocations, approvals, conflicts |
+| Collaboration | `GET/POST /api/requests/{id}`, attachments, messages, respond |
+| Offerings | `/api/course-offerings`, outline upload, suitability, allocate |
+| Import | `/api/imports/upload`, mapping, advance, reprocess |
+| Admin | users, invitations, assign-chair, memberships, org, rules |
+| Platform | `/api/platform/**` (Super Admin only) |
+
+Full local setup, headers, and package layout: **[docs/DEVELOPER.md](docs/DEVELOPER.md)**.
 
 ---
 
 ## Documentation
 
-| Document | Scope |
-|---|---|
-| [docs/DEVELOPER.md](docs/DEVELOPER.md) | Local setup and API boundaries |
+| Document | Audience |
+|----------|----------|
+| [docs/DEVELOPER.md](docs/DEVELOPER.md) | Engineers — run, architecture, migrations, conventions |
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Institution operators |
-| [docs/SUPER_ADMIN_GUIDE.md](docs/SUPER_ADMIN_GUIDE.md) | Platform product-owner role |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Vercel frontend + VPS API |
-| [docs/SECURITY.md](docs/SECURITY.md) | Tenancy, auth, and secrets handling |
+| [docs/SUPER_ADMIN_GUIDE.md](docs/SUPER_ADMIN_GUIDE.md) | Platform product owner |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Vercel frontend + VPS/Docker API |
+| [docs/SECURITY.md](docs/SECURITY.md) | Tenancy, auth, secrets |
 
 ---
 
-## Security
+## Security notes
 
-- Do not commit `.env`, database passwords, or JWT secrets.
-- Platform routes are enforced on the server via `PlatformAuthFilter`.
-- PostgreSQL must remain private in production; expose only TLS-terminated HTTP(S) to the API.
+- Never commit `.env`, database passwords, or JWT secrets.  
+- Platform APIs are enforced server-side (`PlatformAuthFilter`).  
+- Keep PostgreSQL on a private network; terminate TLS at Nginx (or equivalent).  
+- Demo email-header auth is **not** production-safe.
 
 ---
 

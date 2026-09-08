@@ -44,6 +44,15 @@ export type ConflictCategory =
   | 'Duplicate'
   | 'Room';
 
+export interface Membership {
+  id: string;
+  organizationNodeId: string;
+  organizationName: string;
+  organizationType: string;
+  role: string;
+  isPrimary: boolean;
+}
+
 export interface User {
   id: string;
   name: string;
@@ -52,6 +61,10 @@ export interface User {
   initials: string;
   departmentName: string;
   organizationNodeId?: string;
+  activeDepartmentId?: string;
+  activeDepartmentName?: string;
+  activeRole?: string;
+  memberships?: Membership[];
 }
 
 export interface OrganizationNode {
@@ -116,7 +129,9 @@ export interface TeachingRequest {
   academicYear: string;
   status: string;
   createdAt: string;
-  direction: 'outgoing' | 'incoming';
+  direction: 'outgoing' | 'incoming' | 'other';
+  createdBy?: string | null;
+  courseOfferingId?: string | null;
 }
 
 export interface CandidateMetrics {
@@ -198,6 +213,9 @@ export interface DashboardStats {
   optimal: number;
   nearLimit: number;
   overloaded: number;
+  scopeDepartmentId?: string | null;
+  scopeDepartmentName?: string | null;
+  scopeRole?: string | null;
 }
 
 export type BoardColumnKey =

@@ -1,19 +1,51 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { UNITS } from '../data/mockData';
 import { useApp } from '../context/AppContext';
 import { useFeedback } from '../context/FeedbackContext';
 import { useAsyncData } from '../hooks/useAsyncData';
-import { organizationService, unitService } from '../services';
+import { courseOfferingService, organizationService, unitService } from '../services';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { DrawerCloseButton, PageHead } from '../components/ui/Drawer';
 import { FormActions, Modal } from '../components/ui/Modal';
 import { IconExchange, IconSearch } from '../components/ui/Icons';
+import { SuggestInput } from '../components/ui/SuggestInput';
 import type { AcademicUnit } from '../types';
 
-function UnitDrawer({ unit, onClose }: { unit: AcademicUnit; onClose: () => void }) {
+function UnitDrawer({
+  unit,
+  onClose,
+}: {
+  unit: AcademicUnit;
+  onClose: () => void;
+}) {
   const navigate = useNavigate();
+  const { setSelectedOfferingId } = useApp();
+  const { error: notifyError, success } = useFeedback();
+  const [busy, setBusy] = useState(false);
+  const unallocated = unit.status.toLowerCase().includes('unallocat');
+
+  const openAllocate = async () => {
+    setBusy(true);
+    try {
+      const offering = await courseOfferingService.ensureForUnit({
+        id: unit.id,
+        name: unit.name,
+        sourceDepartmentId: unit.sourceDepartmentId,
+        requiredExpertise: unit.requiredExpertise,
+      });
+      setSelectedOfferingId(offering.id);
+      onClose();
+      success(`Opened allocate-by-context for ${unit.code}`);
+      navigate('/allocate-context');
+    } catch (e) {
+      notifyError(e instanceof Error ? e.message : 'Could not open allocate-by-context');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <>
       <div className="drawer-head">
@@ -43,10 +75,22 @@ function UnitDrawer({ unit, onClose }: { unit: AcademicUnit; onClose: () => void
         <div className="btn-row" style={{ marginTop: 8 }}>
           {unit.requiredExpertise.map((e) => <span className="badge badge-neutral" key={e}>{e}</span>)}
         </div>
+        {unallocated && (
+          <p className="field-hint" style={{ marginTop: 14 }}>
+            Allocate by context ranks lecturers using expertise and current workload.
+          </p>
+        )}
       </div>
       <div className="drawer-foot">
         <Button onClick={onClose}>Close</Button>
-        <Button variant="primary" style={{ marginLeft: 'auto' }} onClick={() => { onClose(); navigate('/recommendations'); }}>Find candidates</Button>
+        <Button
+          variant="primary"
+          style={{ marginLeft: 'auto' }}
+          disabled={busy}
+          onClick={() => void openAllocate()}
+        >
+          {busy ? 'Opening…' : unallocated ? 'Allocate by context' : 'Find candidates'}
+        </Button>
       </div>
     </>
   );
@@ -55,6 +99,8 @@ function UnitDrawer({ unit, onClose }: { unit: AcademicUnit; onClose: () => void
 export function UnitsPage() {
   const { openDrawer, closeDrawer } = useApp();
   const { error: notifyError, success } = useFeedback();
+  const [searchParams] = useSearchParams();
+  const statusParam = searchParams.get('status') || '';
   const [tick, setTick] = useState(0);
   const { data: units, fromApi } = useAsyncData(() => unitService.list(), UNITS, [tick]);
   const { data: orgs } = useAsyncData(() => organizationService.list(), [], []);
@@ -63,15 +109,20 @@ export function UnitsPage() {
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
   const [deptFilter, setDeptFilter] = useState('');
-  const [form, setForm] = useState({ code: '', name: '', sourceDepartmentId: '', contactHours: '3', studentCount: '100', requiredExpertise: '' });
+  const [statusFilter, setStatusFilter] = useState(statusParam);
+  const [form, setForm] = useState({ code: '', name: '', sourceDepartment: '', contactHours: '3', studentCount: '100', requiredExpertise: '' });
 
   const save = async () => {
+    if (!form.sourceDepartment.trim()) {
+      notifyError('Enter a source department');
+      return;
+    }
     setBusy(true);
     try {
       await unitService.create({
         code: form.code,
         name: form.name,
-        sourceDepartmentId: form.sourceDepartmentId || depts[0]?.id,
+        sourceDepartment: form.sourceDepartment.trim(),
         contactHours: Number(form.contactHours) || 3,
         studentCount: Number(form.studentCount) || 0,
         requiredExpertise: form.requiredExpertise.split(',').map((s) => s.trim()).filter(Boolean),
@@ -93,8 +144,11 @@ export function UnitsPage() {
       u.code.toLowerCase().includes(q) ||
       u.name.toLowerCase().includes(q) ||
       (u.lecturerName || '').toLowerCase().includes(q);
-    const matchesDept = !deptFilter || u.sourceDepartmentId === deptFilter;
-    return matchesQuery && matchesDept;
+    const deptQ = deptFilter.trim().toLowerCase();
+    const matchesDept = !deptQ || u.sourceDepartment.toLowerCase().includes(deptQ);
+    const statusQ = statusFilter.trim().toLowerCase();
+    const matchesStatus = !statusQ || u.status.toLowerCase().includes(statusQ.toLowerCase());
+    return matchesQuery && matchesDept && matchesStatus;
   });
 
   return (
@@ -109,17 +163,26 @@ export function UnitsPage() {
           <IconSearch />
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search units…" />
         </div>
-        <select
-          className="filter-chip"
+        <SuggestInput
+          id="unit-dept-filter"
           value={deptFilter}
-          onChange={(e) => setDeptFilter(e.target.value)}
-          style={{ appearance: 'auto' }}
-        >
-          <option value="">All departments</option>
-          {depts.map((d) => (
-            <option key={d.id} value={d.id}>{d.name}</option>
-          ))}
-        </select>
+          onChange={setDeptFilter}
+          options={depts.map((d) => ({ value: d.id, label: d.name }))}
+          placeholder="Filter by department…"
+          hint=""
+        />
+        <SuggestInput
+          id="unit-status-filter"
+          value={statusFilter}
+          onChange={setStatusFilter}
+          options={[
+            { value: 'Unallocated', label: 'Unallocated' },
+            { value: 'Pending', label: 'Pending' },
+            { value: 'Allocated', label: 'Allocated' },
+          ]}
+          placeholder="Filter by status…"
+          hint=""
+        />
       </div>
       <div className="table-wrap">
         <table>
@@ -143,11 +206,15 @@ export function UnitsPage() {
       <Modal open={showAdd} title="Add academic unit" onClose={() => setShowAdd(false)} footer={<FormActions onCancel={() => setShowAdd(false)} onSubmit={save} busy={busy} submitLabel="Create unit" />}>
         <div className="field"><label>Code</label><input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="MAT 204" /></div>
         <div className="field"><label>Name</label><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
-        <div className="field"><label>Source department</label>
-          <select value={form.sourceDepartmentId} onChange={(e) => setForm({ ...form, sourceDepartmentId: e.target.value })}>
-            <option value="">Select</option>
-            {depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-          </select>
+        <div className="field">
+          <label>Source department</label>
+          <SuggestInput
+            id="unit-source-dept"
+            value={form.sourceDepartment}
+            onChange={(v) => setForm({ ...form, sourceDepartment: v })}
+            options={depts.map((d) => ({ value: d.id, label: d.name }))}
+            placeholder="Type department name…"
+          />
         </div>
         <div className="field"><label>Contact hours</label><input value={form.contactHours} onChange={(e) => setForm({ ...form, contactHours: e.target.value })} /></div>
         <div className="field"><label>Students</label><input value={form.studentCount} onChange={(e) => setForm({ ...form, studentCount: e.target.value })} /></div>

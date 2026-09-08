@@ -24,7 +24,8 @@ class AdminConfigService(
     private val mappingRepo: ImportMappingProfileRepository,
     private val orgRepo: OrganizationNodeRepository,
     private val auditRepo: AuditLogRepository,
-    private val invitationRepo: InvitationRepository
+    private val invitationRepo: InvitationRepository,
+    private val membershipRepo: OrganizationMembershipRepository
 ) {
     fun listInstitutions(): List<InstitutionDto> =
         tenantRepo.findAll()
@@ -435,8 +436,11 @@ class AdminConfigService(
             ImportMappingProfile(
                 tenantId = TenantContext.get(),
                 name = req.name,
-                entityType = req.entityType,
-                columnMap = req.columnMap.entries.joinToString(";") { "${it.key}=${it.value}" }
+                entityType = req.entityType.uppercase(),
+                columnMap = req.columnMap.entries.joinToString(";") { "${it.key}=${it.value}" },
+                fileFormat = req.fileFormat,
+                notes = req.notes,
+                mappingVersion = 1
             )
         )
         audit("Import mapping profile created", "ImportMappingProfile", saved.id.toString(), saved.name)
@@ -462,8 +466,113 @@ class AdminConfigService(
                 accountStatus = if (req.active) "ACTIVE" else "PENDING"
             )
         )
+        if (orgId != null) {
+            upsertMembership(tenantId, saved.id, orgId, req.role, primary = true)
+        }
         audit("User created", "User", saved.id.toString(), saved.email)
         return UserDto(saved.id, saved.email, saved.fullName, saved.role, saved.active, saved.organizationNodeId)
+    }
+
+    fun listMemberships(departmentId: UUID?): List<MembershipDto> {
+        val tenantId = TenantContext.get()
+        val nodes = orgRepo.findByTenantIdOrderByNameAsc(tenantId).associateBy { it.id }
+        val rows = if (departmentId != null) {
+            membershipRepo.findByTenantIdAndOrganizationNodeId(tenantId, departmentId)
+        } else {
+            membershipRepo.findAll().filter { it.tenantId == tenantId }
+        }
+        return rows.filter { it.status == "ACTIVE" }.mapNotNull { m ->
+            val node = nodes[m.organizationNodeId] ?: return@mapNotNull null
+            MembershipDto(m.id, m.organizationNodeId, node.name, node.type, m.role, m.isPrimary)
+        }
+    }
+
+    /**
+     * Assign exactly one ACTIVE DEPARTMENT_CHAIR for a department.
+     * Demotes any prior active chair membership for that department.
+     */
+    @Transactional
+    fun assignDepartmentChair(req: AssignChairRequest): MembershipDto {
+        val tenantId = TenantContext.get()
+        val deptId = resolveInvitationOrgId(tenantId, req.departmentId, req.department)
+            ?: throw IllegalArgumentException("Department is required")
+        val node = orgRepo.findById(deptId).orElseThrow { NoSuchElementException("Department not found") }
+        if (!node.type.equals("Department", true)) {
+            throw IllegalArgumentException("Chair must be assigned to a Department node")
+        }
+        val user = when {
+            req.userId != null -> userRepo.findById(req.userId).orElseThrow { NoSuchElementException("User not found") }
+            !req.email.isNullOrBlank() -> userRepo.findByTenantIdAndEmail(tenantId, req.email.trim())
+                ?: throw NoSuchElementException("User not found")
+            else -> throw IllegalArgumentException("userId or email is required")
+        }
+        if (user.tenantId != tenantId) throw IllegalArgumentException("User belongs to another institution")
+
+        membershipRepo.findByTenantIdAndOrganizationNodeIdAndRoleAndStatus(
+            tenantId, deptId, "DEPARTMENT_CHAIR", "ACTIVE"
+        ).forEach { existing ->
+            if (existing.userId != user.id) {
+                existing.status = "INACTIVE"
+                membershipRepo.save(existing)
+            }
+        }
+
+        user.role = "DEPARTMENT_CHAIR"
+        user.organizationNodeId = deptId
+        userRepo.save(user)
+        val membership = upsertMembership(tenantId, user.id, deptId, "DEPARTMENT_CHAIR", primary = true)
+        audit("Department chair assigned", "OrganizationMembership", membership.id.toString(), "${user.email} → ${node.name}")
+        return MembershipDto(membership.id, deptId, node.name, node.type, membership.role, membership.isPrimary)
+    }
+
+    @Transactional
+    fun createMembership(req: CreateMembershipRequest): MembershipDto {
+        val tenantId = TenantContext.get()
+        val user = userRepo.findById(req.userId).orElseThrow { NoSuchElementException("User not found") }
+        if (user.tenantId != tenantId) throw IllegalArgumentException("User belongs to another institution")
+        val node = orgRepo.findById(req.organizationNodeId).orElseThrow { NoSuchElementException("Organization node not found") }
+        if (req.role.equals("DEPARTMENT_CHAIR", true)) {
+            return assignDepartmentChair(
+                AssignChairRequest(userId = req.userId, departmentId = req.organizationNodeId)
+            )
+        }
+        val saved = upsertMembership(tenantId, user.id, req.organizationNodeId, req.role.uppercase(), req.isPrimary)
+        return MembershipDto(saved.id, node.id, node.name, node.type, saved.role, saved.isPrimary)
+    }
+
+    private fun upsertMembership(
+        tenantId: UUID,
+        userId: UUID,
+        organizationNodeId: UUID,
+        role: String,
+        primary: Boolean
+    ): OrganizationMembership {
+        val existing = membershipRepo.findByTenantIdAndUserId(tenantId, userId)
+            .firstOrNull { it.organizationNodeId == organizationNodeId && it.role.equals(role, true) }
+        if (primary) {
+            membershipRepo.findByTenantIdAndUserId(tenantId, userId).forEach {
+                if (it.isPrimary) {
+                    it.isPrimary = false
+                    membershipRepo.save(it)
+                }
+            }
+        }
+        if (existing != null) {
+            existing.status = "ACTIVE"
+            existing.isPrimary = primary || existing.isPrimary
+            existing.role = role.uppercase()
+            return membershipRepo.save(existing)
+        }
+        return membershipRepo.save(
+            OrganizationMembership(
+                tenantId = tenantId,
+                userId = userId,
+                organizationNodeId = organizationNodeId,
+                role = role.uppercase(),
+                status = "ACTIVE",
+                isPrimary = primary
+            )
+        )
     }
 
     fun listInvitations(): List<InvitationDto> =
@@ -483,6 +592,7 @@ class AdminConfigService(
                 it.status = "REVOKED"
                 invitationRepo.save(it)
             }
+        val orgId = resolveInvitationOrgId(tenantId, req.organizationNodeId, req.organization)
         val token = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID().toString().replace("-", "").take(8)
         val saved = invitationRepo.save(
             Invitation(
@@ -490,7 +600,7 @@ class AdminConfigService(
                 email = email,
                 fullName = name,
                 role = req.role.trim().ifBlank { "VIEWER" },
-                organizationNodeId = req.organizationNodeId,
+                organizationNodeId = orgId,
                 token = token,
                 status = "PENDING",
                 expiresAt = Instant.now().plus(14, ChronoUnit.DAYS)
@@ -552,6 +662,9 @@ class AdminConfigService(
         inv.status = "ACCEPTED"
         inv.acceptedAt = Instant.now()
         invitationRepo.save(inv)
+        user.organizationNodeId?.let { orgId ->
+            upsertMembership(user.tenantId, user.id, orgId, user.role, primary = true)
+        }
         auditRepo.save(
             AuditLog(
                 tenantId = inv.tenantId,
@@ -566,7 +679,18 @@ class AdminConfigService(
             email = user.email,
             name = user.fullName,
             role = user.role,
-            tenantId = user.tenantId
+            tenantId = user.tenantId,
+            userId = user.id,
+            organizationNodeId = user.organizationNodeId,
+            departmentName = user.organizationNodeId?.let { oid ->
+                orgRepo.findById(oid).orElse(null)?.name
+            },
+            activeDepartmentId = user.organizationNodeId,
+            activeDepartmentName = user.organizationNodeId?.let { oid ->
+                orgRepo.findById(oid).orElse(null)?.name
+            },
+            activeRole = user.role,
+            memberships = emptyList()
         )
     }
 
@@ -596,6 +720,23 @@ class AdminConfigService(
         return UserDto(user.id, user.email, user.fullName, user.role, user.active, user.organizationNodeId)
     }
 
+    private fun resolveInvitationOrgId(tenantId: UUID, id: UUID?, name: String?): UUID? {
+        if (id != null) {
+            orgRepo.findByTenantIdOrderByNameAsc(tenantId).firstOrNull { it.id == id }?.let { return it.id }
+        }
+        val raw = name?.trim().orEmpty()
+        if (raw.isBlank()) return null
+        runCatching { UUID.fromString(raw) }.getOrNull()?.let { uuid ->
+            orgRepo.findByTenantIdOrderByNameAsc(tenantId).firstOrNull { it.id == uuid }?.let { return it.id }
+        }
+        return orgRepo.findByTenantIdOrderByNameAsc(tenantId)
+            .firstOrNull {
+                it.name.equals(raw, ignoreCase = true) ||
+                    "${it.name} (${it.type})".equals(raw, ignoreCase = true)
+            }
+            ?.id
+    }
+
     private fun toYearDto(y: AcademicYear) = AcademicYearDto(
         y.id, y.label, y.startDate?.toString(), y.endDate?.toString()
     )
@@ -607,7 +748,10 @@ class AdminConfigService(
         columnMap = p.columnMap.split(";").mapNotNull {
             val parts = it.split("=", limit = 2)
             if (parts.size == 2) parts[0] to parts[1] else null
-        }.toMap()
+        }.toMap(),
+        mappingVersion = p.mappingVersion,
+        fileFormat = p.fileFormat,
+        notes = p.notes
     )
 
     private fun audit(action: String, entityType: String, entityId: String?, details: String?) {

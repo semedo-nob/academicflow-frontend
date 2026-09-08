@@ -1,6 +1,8 @@
 package com.academicflow.entity
 
 import jakarta.persistence.*
+import org.hibernate.annotations.JdbcTypeCode
+import org.hibernate.type.SqlTypes
 import java.math.BigDecimal
 import java.time.Instant
 import java.time.LocalDate
@@ -49,6 +51,35 @@ class OrganizationNode(
     var name: String = "",
     var type: String = "",
     var parentId: UUID? = null,
+    var createdAt: Instant = Instant.now()
+)
+
+@Entity
+@Table(name = "organization_memberships")
+class OrganizationMembership(
+    @Id var id: UUID = UUID.randomUUID(),
+    var tenantId: UUID = UUID(0, 0),
+    var userId: UUID = UUID(0, 0),
+    var organizationNodeId: UUID = UUID(0, 0),
+    var role: String = "VIEWER",
+    var status: String = "ACTIVE",
+    var isPrimary: Boolean = false,
+    var createdAt: Instant = Instant.now()
+)
+
+@Entity
+@Table(name = "students")
+class Student(
+    @Id var id: UUID = UUID.randomUUID(),
+    var tenantId: UUID = UUID(0, 0),
+    var organizationNodeId: UUID = UUID(0, 0),
+    var programme: String? = null,
+    var studentNumber: String = "",
+    var fullName: String = "",
+    var email: String? = null,
+    var yearOfStudy: Int? = null,
+    var status: String = "ACTIVE",
+    var userId: UUID? = null,
     var createdAt: Instant = Instant.now()
 )
 
@@ -134,12 +165,14 @@ class TeachingRequest(
     var requestingDepartmentId: UUID = UUID(0, 0),
     var preferredDepartmentId: UUID? = null,
     var academicUnitId: UUID = UUID(0, 0),
+    var courseOfferingId: UUID? = null,
     var studentCount: Int = 0,
     var contactHours: BigDecimal = BigDecimal.ZERO,
     var requiredExpertise: String? = null,
     var academicYearId: UUID? = null,
     var semesterId: UUID? = null,
     var status: String = "DRAFT",
+    var briefingNote: String? = null,
     var createdBy: UUID? = null,
     var createdAt: Instant = Instant.now()
 )
@@ -175,9 +208,15 @@ class Allocation(
     var academicUnitId: UUID = UUID(0, 0),
     var lecturerId: UUID? = null,
     var teachingRequestId: UUID? = null,
+    var courseOfferingId: UUID? = null,
     var matchScore: BigDecimal? = null,
     var status: String = "ASSIGNED",
     var overrideReason: String? = null,
+    var recommendedLecturerId: UUID? = null,
+    var suitabilityScore: BigDecimal? = null,
+    var suitabilityBreakdown: String? = null,
+    var decisionType: String? = null,
+    var decisionNote: String? = null,
     var createdBy: UUID? = null,
     var createdAt: Instant = Instant.now(),
     var updatedAt: Instant = Instant.now()
@@ -248,6 +287,7 @@ class ImportSession(
     var entityType: String = "",
     var status: String = "UPLOADED",
     var columnMap: String? = null,
+    var resultSummary: String? = null,
     var createdBy: UUID? = null,
     var createdAt: Instant = Instant.now()
 )
@@ -312,6 +352,9 @@ class ImportMappingProfile(
     var name: String = "",
     var entityType: String = "",
     var columnMap: String = "",
+    var mappingVersion: Int = 1,
+    var fileFormat: String? = null,
+    var notes: String? = null,
     var createdAt: Instant = Instant.now()
 )
 
@@ -363,4 +406,119 @@ class Invitation(
     var createdAt: Instant = Instant.now(),
     var expiresAt: Instant = Instant.now().plusSeconds(60L * 60 * 24 * 14),
     var acceptedAt: Instant? = null
+)
+
+@Entity
+@Table(name = "course_offerings")
+class CourseOffering(
+    @Id var id: UUID = UUID.randomUUID(),
+    var tenantId: UUID = UUID(0, 0),
+    var academicUnitId: UUID = UUID(0, 0),
+    var programme: String? = null,
+    var contextLabel: String? = null,
+    var levelLabel: String? = null,
+    var displayTitle: String? = null,
+    var academicYearId: UUID? = null,
+    var semesterId: UUID? = null,
+    var requestingDepartmentId: UUID? = null,
+    var owningDepartmentId: UUID? = null,
+    var status: String = "ACTIVE",
+    var createdAt: Instant = Instant.now()
+)
+
+@Entity
+@Table(name = "course_outlines")
+class CourseOutline(
+    @Id var id: UUID = UUID.randomUUID(),
+    var tenantId: UUID = UUID(0, 0),
+    var courseOfferingId: UUID = UUID(0, 0),
+    var fileName: String = "",
+    var contentType: String? = null,
+    var detectedContentType: String? = null,
+    var fileExtension: String? = null,
+    var fileSizeBytes: Long? = null,
+    var checksumSha256: String? = null,
+    @JdbcTypeCode(SqlTypes.BINARY)
+    @Column(name = "file_bytes", columnDefinition = "BYTEA")
+    var fileBytes: ByteArray? = null,
+    var extractedText: String? = null,
+    var extractedJson: String? = null,
+    var rawExtractionJson: String? = null,
+    var extractionConfidence: BigDecimal = BigDecimal.ZERO,
+    var needsReview: Boolean = true,
+    var processingStatus: String = "UPLOADED",
+    var extractionMethod: String? = null,
+    var processingMessage: String? = null,
+    var processingErrorCode: String? = null,
+    var versionNo: Int = 1,
+    var uploadedBy: UUID? = null,
+    var createdAt: Instant = Instant.now()
+)
+
+@Entity
+@Table(name = "course_requirements")
+class CourseRequirement(
+    @Id var id: UUID = UUID.randomUUID(),
+    var tenantId: UUID = UUID(0, 0),
+    var courseOfferingId: UUID = UUID(0, 0),
+    var requirementType: String = "TOPIC",
+    var label: String = "",
+    var weight: BigDecimal = BigDecimal.ONE,
+    var source: String = "MANUAL",
+    var createdAt: Instant = Instant.now()
+)
+
+@Entity
+@Table(name = "lecturer_context_experience")
+class LecturerContextExperience(
+    @Id var id: UUID = UUID.randomUUID(),
+    var tenantId: UUID = UUID(0, 0),
+    var lecturerId: UUID = UUID(0, 0),
+    var contextLabel: String? = null,
+    var programme: String? = null,
+    var levelLabel: String? = null,
+    var topicLabel: String? = null,
+    var unitCode: String? = null,
+    var timesTaught: Int = 1,
+    var lastTaughtLabel: String? = null
+)
+
+@Entity
+@Table(name = "request_attachments")
+class RequestAttachment(
+    @Id var id: UUID = UUID.randomUUID(),
+    var tenantId: UUID = UUID(0, 0),
+    var teachingRequestId: UUID = UUID(0, 0),
+    var fileName: String = "",
+    var contentType: String? = null,
+    var fileSizeBytes: Long? = null,
+    @JdbcTypeCode(SqlTypes.BINARY)
+    @Column(name = "file_bytes", columnDefinition = "BYTEA")
+    var fileBytes: ByteArray? = null,
+    var docType: String = "COURSE_OUTLINE",
+    var uploadedBy: UUID? = null,
+    var uploadedByName: String? = null,
+    var departmentId: UUID? = null,
+    var departmentName: String? = null,
+    var createdAt: Instant = Instant.now()
+)
+
+@Entity
+@Table(name = "request_messages")
+class RequestMessage(
+    @Id var id: UUID = UUID.randomUUID(),
+    var tenantId: UUID = UUID(0, 0),
+    var teachingRequestId: UUID = UUID(0, 0),
+    var authorUserId: UUID? = null,
+    var authorName: String? = null,
+    var authorRole: String? = null,
+    var authorDepartmentId: UUID? = null,
+    var authorDepartmentName: String? = null,
+    /** COMMENT | ELIGIBILITY_NOTE | AUTHORITY_NOTICE | SYSTEM | ACCEPT_NOTE | DECLINE_NOTE */
+    var messageType: String = "COMMENT",
+    var body: String = "",
+    var relatedLecturerId: UUID? = null,
+    var relatedLecturerName: String? = null,
+    var notifyAuthority: Boolean = false,
+    var createdAt: Instant = Instant.now()
 )

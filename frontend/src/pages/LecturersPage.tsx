@@ -9,6 +9,7 @@ import { Button } from '../components/ui/Button';
 import { DrawerCloseButton, PageHead } from '../components/ui/Drawer';
 import { FormActions, Modal } from '../components/ui/Modal';
 import { IconSearch } from '../components/ui/Icons';
+import { SuggestInput } from '../components/ui/SuggestInput';
 import type { Lecturer } from '../types';
 
 function LecturerDrawer({ lecturer, onClose }: { lecturer: Lecturer; onClose: () => void }) {
@@ -91,7 +92,7 @@ export function LecturersPage() {
     staffNumber: '',
     name: '',
     email: '',
-    departmentId: '',
+    department: '',
     qualifications: '',
     maximumWorkload: '12',
     availability: 'Monday–Friday',
@@ -105,13 +106,17 @@ export function LecturersPage() {
   };
 
   const save = async () => {
+    if (!form.department.trim()) {
+      notifyError('Enter a department');
+      return;
+    }
     setBusy(true);
     try {
       await lecturerService.create({
         staffNumber: form.staffNumber,
         name: form.name,
         email: form.email,
-        departmentId: form.departmentId || depts[0]?.id,
+        department: form.department.trim(),
         qualifications: form.qualifications,
         maximumWorkload: Number(form.maximumWorkload) || 12,
         availability: form.availability,
@@ -137,7 +142,8 @@ export function LecturersPage() {
       l.staffNumber.toLowerCase().includes(q) ||
       l.email.toLowerCase().includes(q) ||
       l.expertise.some((e) => e.toLowerCase().includes(q));
-    const matchesDept = !deptFilter || l.departmentId === deptFilter;
+    const deptQ = deptFilter.trim().toLowerCase();
+    const matchesDept = !deptQ || l.department.toLowerCase().includes(deptQ);
     return matchesQuery && matchesDept;
   });
 
@@ -160,19 +166,14 @@ export function LecturersPage() {
           <IconSearch />
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search lecturers…" />
         </div>
-        <select
-          className="filter-chip"
+        <SuggestInput
+          id="lecturer-dept-filter"
           value={deptFilter}
-          onChange={(e) => setDeptFilter(e.target.value)}
-          style={{ appearance: 'auto' }}
-        >
-          <option value="">All departments</option>
-          {depts.map((d) => (
-            <option key={d.id} value={d.id}>
-              {d.name}
-            </option>
-          ))}
-        </select>
+          onChange={setDeptFilter}
+          options={depts.map((d) => ({ value: d.id, label: d.name }))}
+          placeholder="Filter by department…"
+          hint=""
+        />
       </div>
       <div className="table-wrap">
         <table>
@@ -241,14 +242,13 @@ export function LecturersPage() {
         </div>
         <div className="field">
           <label>Department</label>
-          <select value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })}>
-            <option value="">Select department</option>
-            {depts.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.name}
-              </option>
-            ))}
-          </select>
+          <SuggestInput
+            id="lecturer-department"
+            value={form.department}
+            onChange={(v) => setForm({ ...form, department: v })}
+            options={depts.map((d) => ({ value: d.id, label: d.name }))}
+            placeholder="Type department name…"
+          />
         </div>
         <div className="field">
           <label>Qualifications</label>
@@ -272,12 +272,13 @@ export function LecturersPage() {
         </div>
         <div className="field">
           <label>Expertise level</label>
-          <select value={form.expertiseLevel} onChange={(e) => setForm({ ...form, expertiseLevel: e.target.value })}>
-            <option>Excellent</option>
-            <option>Strong</option>
-            <option>Moderate</option>
-            <option>Basic</option>
-          </select>
+          <SuggestInput
+            id="lecturer-expertise-level"
+            value={form.expertiseLevel}
+            onChange={(v) => setForm({ ...form, expertiseLevel: v })}
+            options={['Excellent', 'Strong', 'Moderate', 'Basic'].map((l) => ({ value: l, label: l }))}
+            placeholder="Type level…"
+          />
         </div>
       </Modal>
     </>

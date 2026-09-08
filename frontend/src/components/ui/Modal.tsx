@@ -8,16 +8,27 @@ interface ModalProps {
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
+  /** Wider dialog for collaboration / multi-column content. */
+  wide?: boolean;
 }
 
-export function Modal({ open, title, onClose, children, footer }: ModalProps) {
+export function Modal({ open, title, onClose, children, footer, wide }: ModalProps) {
   if (!open) return null;
   return (
     <>
       <div className="overlay active" onClick={onClose} />
       <div
         className="drawer active"
-        style={{ width: 480, left: '50%', right: 'auto', top: '8vh', bottom: 'auto', maxHeight: '84vh', transform: 'translateX(-50%)', borderRadius: 14 }}
+        style={{
+          width: wide ? 'min(920px, 94vw)' : 480,
+          left: '50%',
+          right: 'auto',
+          top: '6vh',
+          bottom: 'auto',
+          maxHeight: '88vh',
+          transform: 'translateX(-50%)',
+          borderRadius: 14,
+        }}
       >
         <div className="drawer-head">
           <div style={{ fontWeight: 700, fontSize: 16 }}>{title}</div>

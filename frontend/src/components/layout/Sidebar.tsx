@@ -40,6 +40,7 @@ const REQUESTS: Item[] = [
 ];
 
 const ALLOCATION: Item[] = [
+  { key: 'allocate-context', to: '/allocate-context', label: 'Allocate by context', icon: <IconTarget /> },
   { key: 'allocation', to: '/allocation', label: 'Allocation Board', icon: <IconLayers /> },
   { key: 'workload', to: '/workload', label: 'Workload', icon: <IconGauge /> },
   { key: 'timetable', to: '/timetable', label: 'Timetable', icon: <IconCalendar /> },

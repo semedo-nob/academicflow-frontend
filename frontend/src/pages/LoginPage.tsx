@@ -3,6 +3,7 @@ import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { authService } from '../services';
 import { homePath, normalizeRole } from '../lib/access';
+import { resolvePostLoginPath } from './OnboardingPage';
 import { BrandMark } from '../components/ui/Icons';
 import { Button } from '../components/ui/Button';
 
@@ -90,7 +91,8 @@ export function LoginPage() {
       await login(email.trim(), password || 'local');
       const raw = localStorage.getItem('af_user');
       const role = raw ? normalizeRole(JSON.parse(raw).role) : 'VIEWER';
-      navigate(homePath(role));
+      const path = await resolvePostLoginPath(role);
+      navigate(path);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Sign in failed');
     } finally {

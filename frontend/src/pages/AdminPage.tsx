@@ -7,6 +7,7 @@ import { adminService, auditService, organizationService, userService } from '..
 import { adminSectionsFor, isSuperAdmin, type AdminSection } from '../lib/access';
 import { Button } from '../components/ui/Button';
 import { Card, DrawerCloseButton, PageHead } from '../components/ui/Drawer';
+import { SuggestInput } from '../components/ui/SuggestInput';
 
 function DrawerShell({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   return (
@@ -54,6 +55,38 @@ function AuditDrawer({ onClose }: { onClose: () => void }) {
   );
 }
 
+function RoleCell({
+  userId,
+  role,
+  options,
+  onSaved,
+}: {
+  userId: string;
+  role: string;
+  options: { code: string; name?: string }[];
+  onSaved: () => void;
+}) {
+  const [val, setVal] = useState(role);
+  return (
+    <SuggestInput
+      id={`user-role-${userId}`}
+      value={val}
+      onChange={setVal}
+      onCommit={async (v) => {
+        if (v.trim() && v.trim() !== role) {
+          await userService.update(userId, { role: v.trim() });
+          onSaved();
+        } else {
+          setVal(role);
+        }
+      }}
+      options={options.map((r) => ({ value: r.code, label: r.name || r.code }))}
+      hint=""
+      placeholder="Role…"
+    />
+  );
+}
+
 function UsersDrawer({ onClose }: { onClose: () => void }) {
   const { user } = useApp();
   const { error: notifyError, success } = useFeedback();
@@ -62,13 +95,37 @@ function UsersDrawer({ onClose }: { onClose: () => void }) {
   const { data: invitations } = useAsyncData(() => userService.invitations(), [], [tick]);
   const { data: roles } = useAsyncData(() => adminService.roles(), [], []);
   const { data: orgs } = useAsyncData(() => organizationService.list(), [], []);
-  const [form, setForm] = useState({ name: '', email: '', role: 'VIEWER', organizationNodeId: '' });
+  const [form, setForm] = useState({ name: '', email: '', role: 'VIEWER', organization: '' });
   const [busy, setBusy] = useState(false);
   const [lastInvitePath, setLastInvitePath] = useState<string | null>(null);
+  const [chairForm, setChairForm] = useState({ email: '', department: '' });
 
   const roleOptions = (roles.length ? roles : [{ code: 'VIEWER', name: 'Viewer' }]).filter(
     (r) => isSuperAdmin(user.role) || r.code !== 'SUPER_ADMIN',
   );
+
+  const depts = orgs.filter((o) => o.type === 'Department');
+
+  const assignChair = async () => {
+    if (!chairForm.email.trim() || !chairForm.department.trim()) {
+      notifyError('Chair email and department are required');
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await userService.assignChair({
+        email: chairForm.email.trim(),
+        department: chairForm.department.trim(),
+      });
+      setChairForm({ email: '', department: '' });
+      setTick((t) => t + 1);
+      success(`Assigned ${res.role.replace(/_/g, ' ')} for ${res.organizationName}`);
+    } catch (e) {
+      notifyError(e instanceof Error ? e.message : 'Could not assign chair');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const invite = async () => {
     if (!form.name.trim() || !form.email.trim()) {
@@ -80,10 +137,10 @@ function UsersDrawer({ onClose }: { onClose: () => void }) {
       const res = await userService.invite({
         name: form.name.trim(),
         email: form.email.trim(),
-        role: form.role,
-        organizationNodeId: form.organizationNodeId || null,
+        role: form.role.trim() || 'VIEWER',
+        organization: form.organization.trim() || null,
       });
-      setForm({ name: '', email: '', role: 'VIEWER', organizationNodeId: '' });
+      setForm({ name: '', email: '', role: 'VIEWER', organization: '' });
       setLastInvitePath(res.invitePath);
       setTick((t) => t + 1);
       success(`Invitation created for ${res.email}`);
@@ -115,22 +172,12 @@ function UsersDrawer({ onClose }: { onClose: () => void }) {
                 <td className="cell-primary">{u.name}</td>
                 <td className="cell-sub">{u.email}</td>
                 <td>
-                  <select
-                    value={u.role}
-                    onChange={async (e) => {
-                      await userService.update(u.id, { role: e.target.value });
-                      setTick((t) => t + 1);
-                    }}
-                  >
-                    {roleOptions.map((r) => (
-                      <option key={r.code} value={r.code}>
-                        {r.name || r.code}
-                      </option>
-                    ))}
-                    {!roleOptions.some((r) => r.code === u.role) && (
-                      <option value={u.role}>{u.role}</option>
-                    )}
-                  </select>
+                  <RoleCell
+                    userId={u.id}
+                    role={u.role}
+                    options={roleOptions}
+                    onSaved={() => setTick((t) => t + 1)}
+                  />
                 </td>
                 <td>{u.active ? 'Active' : 'Inactive'}</td>
                 <td>
@@ -199,6 +246,37 @@ function UsersDrawer({ onClose }: { onClose: () => void }) {
       )}
 
       <div className="section-title" style={{ marginTop: 18 }}>
+        Assign department chair
+      </div>
+      <p className="section-sub">
+        Exactly one active chair per department. Assigning a new chair demotes the previous active chair for that
+        department.
+      </p>
+      <div className="field">
+        <label>User email</label>
+        <SuggestInput
+          id="assign-chair-email"
+          value={chairForm.email}
+          onChange={(v) => setChairForm({ ...chairForm, email: v })}
+          options={users.map((u) => ({ value: u.email, label: `${u.name} <${u.email}>` }))}
+          placeholder="Select or type user email…"
+        />
+      </div>
+      <div className="field">
+        <label>Department</label>
+        <SuggestInput
+          id="assign-chair-dept"
+          value={chairForm.department}
+          onChange={(v) => setChairForm({ ...chairForm, department: v })}
+          options={depts.map((d) => ({ value: d.id, label: d.name }))}
+          placeholder="Department name…"
+        />
+      </div>
+      <Button variant="primary" disabled={busy} onClick={() => void assignChair()}>
+        Assign chair
+      </Button>
+
+      <div className="section-title" style={{ marginTop: 18 }}>
         Invite user
       </div>
       <div className="field">
@@ -211,27 +289,23 @@ function UsersDrawer({ onClose }: { onClose: () => void }) {
       </div>
       <div className="field">
         <label>Role</label>
-        <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-          {roleOptions.map((r) => (
-            <option key={r.code} value={r.code}>
-              {r.name || r.code}
-            </option>
-          ))}
-        </select>
+        <SuggestInput
+          id="invite-role"
+          value={form.role}
+          onChange={(v) => setForm({ ...form, role: v })}
+          options={roleOptions.map((r) => ({ value: r.code, label: r.name || r.code }))}
+          placeholder="Type role…"
+        />
       </div>
       <div className="field">
         <label>Organization (optional)</label>
-        <select
-          value={form.organizationNodeId}
-          onChange={(e) => setForm({ ...form, organizationNodeId: e.target.value })}
-        >
-          <option value="">None — assign later</option>
-          {orgs.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.name} ({o.type})
-            </option>
-          ))}
-        </select>
+        <SuggestInput
+          id="invite-org"
+          value={form.organization}
+          onChange={(v) => setForm({ ...form, organization: v })}
+          options={orgs.map((o) => ({ value: o.id, label: `${o.name} (${o.type})` }))}
+          placeholder="Type department or unit…"
+        />
       </div>
       {lastInvitePath && (
         <p className="section-sub">
@@ -472,7 +546,7 @@ function SemestersDrawer({ onClose }: { onClose: () => void }) {
   const [tick, setTick] = useState(0);
   const { data: years } = useAsyncData(() => adminService.years(), [], []);
   const { data: semesters, loading } = useAsyncData(() => adminService.semesters(), [], [tick]);
-  const [form, setForm] = useState({ academicYearId: '', name: '', sequenceNo: 1 });
+  const [form, setForm] = useState({ academicYearId: '', academicYearLabel: '', name: '', sequenceNo: 1 });
   return (
     <DrawerShell title="Semesters" onClose={onClose}>
       {loading && <p className="section-sub">Loading…</p>}
@@ -498,17 +572,20 @@ function SemestersDrawer({ onClose }: { onClose: () => void }) {
       </div>
       <div className="field">
         <label>Academic year</label>
-        <select
-          value={form.academicYearId}
-          onChange={(e) => setForm({ ...form, academicYearId: e.target.value })}
-        >
-          <option value="">Select…</option>
-          {years.map((y) => (
-            <option key={y.id} value={y.id}>
-              {y.label}
-            </option>
-          ))}
-        </select>
+        <SuggestInput
+          id="semester-year"
+          value={form.academicYearLabel}
+          onChange={(v) => {
+            const match = years.find((y) => y.label === v || y.id === v);
+            setForm({
+              ...form,
+              academicYearLabel: v,
+              academicYearId: match?.id || '',
+            });
+          }}
+          options={years.map((y) => ({ value: y.id, label: y.label }))}
+          placeholder="Type academic year…"
+        />
       </div>
       <div className="field">
         <label>Name</label>
@@ -518,8 +595,17 @@ function SemestersDrawer({ onClose }: { onClose: () => void }) {
         variant="primary"
         disabled={!form.academicYearId || !form.name}
         onClick={async () => {
-          await adminService.createSemester(form);
-          setForm({ academicYearId: form.academicYearId, name: '', sequenceNo: form.sequenceNo + 1 });
+          await adminService.createSemester({
+            academicYearId: form.academicYearId,
+            name: form.name,
+            sequenceNo: form.sequenceNo,
+          });
+          setForm({
+            academicYearId: form.academicYearId,
+            academicYearLabel: form.academicYearLabel,
+            name: '',
+            sequenceNo: form.sequenceNo + 1,
+          });
           setTick((t) => t + 1);
         }}
       >
@@ -606,10 +692,17 @@ function MappingDrawer({ onClose }: { onClose: () => void }) {
       </div>
       <div className="field">
         <label>Entity type</label>
-        <select value={form.entityType} onChange={(e) => setForm({ ...form, entityType: e.target.value })}>
-          <option value="LECTURER">LECTURER</option>
-          <option value="ACADEMIC_UNIT">ACADEMIC_UNIT</option>
-        </select>
+        <SuggestInput
+          id="mapping-entity"
+          value={form.entityType}
+          onChange={(v) => setForm({ ...form, entityType: v })}
+          options={[
+            { value: 'ALLOCATION', label: 'ALLOCATION' },
+            { value: 'LECTURER', label: 'LECTURER' },
+            { value: 'ACADEMIC_UNIT', label: 'ACADEMIC_UNIT' },
+          ]}
+          placeholder="Type entity type…"
+        />
       </div>
       <div className="field">
         <label>Column map (Source=field;…)</label>

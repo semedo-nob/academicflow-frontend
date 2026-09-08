@@ -3,8 +3,9 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import { defaultNavigationSuggestions, searchNavigation } from '../../lib/navSearch';
 import { auditService, conflictService, searchService } from '../../services';
-import { IconBell, IconChevDown, IconSearch } from '../ui/Icons';
+import { IconBell, IconSearch } from '../ui/Icons';
 import { DrawerCloseButton } from '../ui/Drawer';
+import { SuggestInput } from '../ui/SuggestInput';
 
 const BREADCRUMBS: Record<string, string> = {
   '/dashboard': 'AcademicFlow / Dashboard',
@@ -97,7 +98,8 @@ function NotificationsDrawer({ onClose }: { onClose: () => void }) {
 export function Topbar() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
-  const { user, period, setAcademicYearId, setSemesterId, openDrawer, closeDrawer, logout } = useApp();
+  const { user, period, setAcademicYearId, setSemesterId, openDrawer, closeDrawer, logout, setActiveDepartment } =
+    useApp();
   const crumb = BREADCRUMBS[pathname] || 'AcademicFlow';
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -117,6 +119,22 @@ export function Topbar() {
     semesterOptions.length > 0
       ? semesterOptions
       : [{ id: 'default-sem', academicYearId: '', academicYearLabel: '', name: period.semesterName }];
+
+  const selectedYearLabel =
+    yearOptions.find((y) => y.id === (period.selectedYearId || yearOptions[0]?.id))?.label ||
+    period.academicYearLabel;
+  const selectedSemesterName =
+    semesters.find((s) => s.id === (period.selectedSemesterId || semesters[0]?.id))?.name ||
+    period.semesterName;
+  const [yearDraft, setYearDraft] = useState(selectedYearLabel);
+  const [semesterDraft, setSemesterDraft] = useState(selectedSemesterName);
+
+  useEffect(() => {
+    setYearDraft(selectedYearLabel);
+  }, [selectedYearLabel]);
+  useEffect(() => {
+    setSemesterDraft(selectedSemesterName);
+  }, [selectedSemesterName]);
 
   const go = useCallback(
     (path: string) => {
@@ -197,7 +215,25 @@ export function Topbar() {
         <div className="topbar-left">
           <div className="breadcrumb">{crumb}</div>
           <div className="context-line">
-            {user.departmentName || 'Department'} <span className="sep">·</span>{' '}
+            {(user.memberships || []).filter((m) => m.organizationType === 'Department').length > 1 ? (
+              <select
+                className="dept-context-select"
+                value={user.activeDepartmentId || ''}
+                onChange={(e) => setActiveDepartment(e.target.value)}
+                aria-label="Active department"
+              >
+                {(user.memberships || [])
+                  .filter((m) => m.organizationType === 'Department')
+                  .map((m) => (
+                    <option key={m.organizationNodeId} value={m.organizationNodeId}>
+                      {m.organizationName}
+                    </option>
+                  ))}
+              </select>
+            ) : (
+              <span>{user.activeDepartmentName || user.departmentName || 'Department'}</span>
+            )}{' '}
+            <span className="sep">·</span>{' '}
             <span className="period">
               {period.academicYearLabel} · {period.semesterName}
             </span>
@@ -211,33 +247,47 @@ export function Topbar() {
           </button>
         </div>
         <div className="topbar-right">
-          <label className="selector-pill" style={{ cursor: 'pointer' }}>
-            <select
-              value={period.selectedYearId || yearOptions[0]?.id}
-              onChange={(e) => setAcademicYearId(e.target.value)}
-              style={{ border: 'none', background: 'transparent', font: 'inherit', color: 'inherit' }}
-            >
-              {yearOptions.map((y) => (
-                <option key={y.id} value={y.id}>
-                  {y.label}
-                </option>
-              ))}
-            </select>
-            <IconChevDown />
+          <label className="selector-pill selector-pill-input">
+            <SuggestInput
+              id="topbar-year"
+              value={yearDraft}
+              onChange={(v) => {
+                setYearDraft(v);
+                const match = yearOptions.find((y) => y.label === v || y.id === v);
+                if (match) setAcademicYearId(match.id);
+              }}
+              onCommit={(v) => {
+                const match = yearOptions.find(
+                  (y) => y.label.toLowerCase() === v.trim().toLowerCase() || y.id === v.trim(),
+                );
+                if (match) setAcademicYearId(match.id);
+                else setYearDraft(selectedYearLabel);
+              }}
+              options={yearOptions.map((y) => ({ value: y.id, label: y.label }))}
+              hint=""
+              placeholder="Academic year"
+            />
           </label>
-          <label className="selector-pill" style={{ cursor: 'pointer' }}>
-            <select
-              value={period.selectedSemesterId || semesters[0]?.id}
-              onChange={(e) => setSemesterId(e.target.value)}
-              style={{ border: 'none', background: 'transparent', font: 'inherit', color: 'inherit' }}
-            >
-              {semesters.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-            <IconChevDown />
+          <label className="selector-pill selector-pill-input">
+            <SuggestInput
+              id="topbar-semester"
+              value={semesterDraft}
+              onChange={(v) => {
+                setSemesterDraft(v);
+                const match = semesters.find((s) => s.name === v || s.id === v);
+                if (match) setSemesterId(match.id);
+              }}
+              onCommit={(v) => {
+                const match = semesters.find(
+                  (s) => s.name.toLowerCase() === v.trim().toLowerCase() || s.id === v.trim(),
+                );
+                if (match) setSemesterId(match.id);
+                else setSemesterDraft(selectedSemesterName);
+              }}
+              options={semesters.map((s) => ({ value: s.id, label: s.name }))}
+              hint=""
+              placeholder="Semester"
+            />
           </label>
           <button
             type="button"

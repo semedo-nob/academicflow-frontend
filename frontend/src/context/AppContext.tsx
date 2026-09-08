@@ -8,9 +8,10 @@ import {
   type ReactNode,
 } from 'react';
 import { CURRENT_USER } from '../data/mockData';
-import type { User } from '../types';
+import type { Membership, User } from '../types';
 import { adminService, authService } from '../services';
 import { normalizeRole } from '../lib/access';
+import { setActiveDepartmentId } from '../services/api';
 
 interface PeriodState {
   academicYearLabel: string;
@@ -26,11 +27,14 @@ interface AppContextValue {
   login: (email?: string, password?: string) => Promise<void>;
   logout: () => void;
   user: User;
+  setActiveDepartment: (departmentId: string) => void;
   drawer: ReactNode | null;
   openDrawer: (node: ReactNode) => void;
   closeDrawer: () => void;
   selectedRequestId: string;
   setSelectedRequestId: (id: string) => void;
+  selectedOfferingId: string;
+  setSelectedOfferingId: (id: string) => void;
   period: PeriodState;
   setAcademicYearId: (id: string) => void;
   setSemesterId: (id: string) => void;
@@ -54,21 +58,30 @@ function loadUser(): User {
     if (raw) {
       const parsed = JSON.parse(raw) as {
         id?: string;
+        userId?: string;
         name: string;
         email: string;
         role: string;
         departmentName?: string;
         organizationNodeId?: string;
+        activeDepartmentId?: string;
+        activeDepartmentName?: string;
+        activeRole?: string;
+        memberships?: Membership[];
       };
       const parts = parsed.name.replace(/^(Dr\.|Prof\.|Mr\.|Ms\.)\s*/, '').split(' ');
       return {
-        id: parsed.id || 'u-local',
+        id: parsed.userId || parsed.id || 'u-local',
         name: parsed.name,
         email: parsed.email,
         role: normalizeRole(parsed.role),
         initials: ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase(),
-        departmentName: parsed.departmentName || 'Institution',
+        departmentName: parsed.activeDepartmentName || parsed.departmentName || 'Institution',
         organizationNodeId: parsed.organizationNodeId,
+        activeDepartmentId: parsed.activeDepartmentId,
+        activeDepartmentName: parsed.activeDepartmentName,
+        activeRole: parsed.activeRole,
+        memberships: parsed.memberships || [],
       };
     }
   } catch {
@@ -82,13 +95,20 @@ function persistUser(user: User) {
     'af_user',
     JSON.stringify({
       id: user.id,
+      userId: user.id,
       name: user.name,
       email: user.email,
       role: user.role,
       departmentName: user.departmentName,
       organizationNodeId: user.organizationNodeId,
+      activeDepartmentId: user.activeDepartmentId,
+      activeDepartmentName: user.activeDepartmentName,
+      activeRole: user.activeRole,
+      memberships: user.memberships || [],
     }),
   );
+  if (user.activeDepartmentId) setActiveDepartmentId(user.activeDepartmentId);
+  else setActiveDepartmentId(null);
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -98,6 +118,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User>(loadUser);
   const [drawer, setDrawer] = useState<ReactNode | null>(null);
   const [selectedRequestId, setSelectedRequestId] = useState('');
+  const [selectedOfferingId, setSelectedOfferingId] = useState('');
   const [period, setPeriod] = useState<PeriodState>(defaultPeriod);
 
   const refreshPeriod = useCallback(async () => {
@@ -156,14 +177,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const res = await authService.login(email, password);
     const parts = res.name.replace(/^(Dr\.|Prof\.|Mr\.|Ms\.)\s*/, '').split(' ');
     const role = normalizeRole(res.role);
+    const memberships = (res.memberships || []) as Membership[];
     const next: User = {
-      id: 'u-local',
+      id: res.userId || 'u-local',
       name: res.name,
       email: res.email,
       role,
       initials: ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase(),
       departmentName:
-        role === 'SUPER_ADMIN' ? 'Platform' : role === 'INSTITUTION_ADMIN' ? 'Institution' : 'Department',
+        res.activeDepartmentName ||
+        res.departmentName ||
+        (role === 'SUPER_ADMIN' ? 'Platform' : role === 'INSTITUTION_ADMIN' ? 'Institution' : 'Department'),
+      organizationNodeId: res.organizationNodeId || undefined,
+      activeDepartmentId: res.activeDepartmentId || res.organizationNodeId || undefined,
+      activeDepartmentName: res.activeDepartmentName || res.departmentName || undefined,
+      activeRole: res.activeRole || res.role,
+      memberships,
     };
     setUser(next);
     persistUser(next);
@@ -171,9 +200,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setAuthenticated(true);
   }, []);
 
+  const setActiveDepartment = useCallback((departmentId: string) => {
+    setUser((prev) => {
+      const m = (prev.memberships || []).find((x) => x.organizationNodeId === departmentId);
+      const next: User = {
+        ...prev,
+        activeDepartmentId: departmentId,
+        activeDepartmentName: m?.organizationName || prev.activeDepartmentName,
+        activeRole: m?.role || prev.activeRole,
+        departmentName: m?.organizationName || prev.departmentName,
+      };
+      persistUser(next);
+      return next;
+    });
+    window.dispatchEvent(new CustomEvent('af-department-changed', { detail: departmentId }));
+  }, []);
+
   const logout = useCallback(() => {
     localStorage.removeItem('af_auth');
     localStorage.removeItem('af_user');
+    setActiveDepartmentId(null);
     setAuthenticated(false);
   }, []);
 
@@ -192,11 +238,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       login,
       logout,
       user,
+      setActiveDepartment,
       drawer,
       openDrawer,
       closeDrawer,
       selectedRequestId,
       setSelectedRequestId,
+      selectedOfferingId,
+      setSelectedOfferingId,
       period,
       setAcademicYearId,
       setSemesterId,
@@ -207,10 +256,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       login,
       logout,
       user,
+      setActiveDepartment,
       drawer,
       openDrawer,
       closeDrawer,
       selectedRequestId,
+      selectedOfferingId,
       period,
       setAcademicYearId,
       setSemesterId,

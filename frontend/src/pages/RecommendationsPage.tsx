@@ -201,23 +201,26 @@ export function RecommendationsPage() {
   const handleSelect = async (c: Candidate, overrideReason?: string) => {
     setSelecting(true);
     try {
-      if (isUuid) {
-        const requests = await requestService.list();
-        const req = requests.find((r) => r.rawId === requestId);
-        const academicUnitId = req?.academicUnitId || 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee1';
-        const topId = candidates.find((x) => x.rank === 1)?.lecturerId;
-        const alloc = await allocationService.create({
-          academicUnitId,
-          lecturerId: c.lecturerId,
-          teachingRequestId: requestId,
-          matchScore: c.score,
-          recommendedLecturerId: topId,
-          overrideReason,
-        });
-        if (alloc.status === 'ASSIGNED' || alloc.status === 'CONFLICT') {
-          // stay on board for review
-        }
+      if (!isUuid) {
+        notifyError('Open a real teaching request from Requests before allocating.');
+        return;
       }
+      const requests = await requestService.list();
+      const req = requests.find((r) => r.rawId === requestId);
+      if (!req?.academicUnitId) {
+        notifyError('This request has no academic unit linked.');
+        return;
+      }
+      const topId = candidates.find((x) => x.rank === 1)?.lecturerId;
+      await allocationService.create({
+        academicUnitId: req.academicUnitId,
+        lecturerId: c.lecturerId,
+        teachingRequestId: requestId,
+        matchScore: c.score,
+        recommendedLecturerId: topId,
+        overrideReason,
+        courseOfferingId: req.courseOfferingId || undefined,
+      });
       navigate('/allocation');
       success('Lecturer selected — review on the allocation board');
     } catch (err) {

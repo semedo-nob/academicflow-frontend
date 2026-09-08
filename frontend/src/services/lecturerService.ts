@@ -111,10 +111,26 @@ function mapCandidate(c: {
 
 export const authService = {
   login: async (email: string, password?: string) => {
-    const res = await api.post<{ email: string; name: string; role: string; tenantId: string }>(
-      '/auth/login',
-      { email, password },
-    );
+    const res = await api.post<{
+      email: string;
+      name: string;
+      role: string;
+      tenantId: string;
+      userId?: string;
+      organizationNodeId?: string | null;
+      departmentName?: string | null;
+      activeDepartmentId?: string | null;
+      activeDepartmentName?: string | null;
+      activeRole?: string | null;
+      memberships?: {
+        id: string;
+        organizationNodeId: string;
+        organizationName: string;
+        organizationType: string;
+        role: string;
+        isPrimary: boolean;
+      }[];
+    }>('/auth/login', { email, password });
     setTenantId(res.tenantId);
     localStorage.setItem('af_user', JSON.stringify(res));
     return res;
@@ -139,10 +155,15 @@ export const authService = {
       expired: boolean;
     }>(`/auth/invitations/${encodeURIComponent(token)}`),
   acceptInvitation: async (body: { token: string; name?: string; password?: string }) => {
-    const res = await api.post<{ email: string; name: string; role: string; tenantId: string }>(
-      '/auth/accept-invitation',
-      body,
-    );
+    const res = await api.post<{
+      email: string;
+      name: string;
+      role: string;
+      tenantId: string;
+      userId?: string;
+      organizationNodeId?: string | null;
+      departmentName?: string | null;
+    }>('/auth/accept-invitation', body);
     setTenantId(res.tenantId);
     localStorage.setItem('af_user', JSON.stringify(res));
     return res;
@@ -194,7 +215,8 @@ export const lecturerService = {
     staffNumber: string;
     name: string;
     email: string;
-    departmentId: string;
+    departmentId?: string;
+    department?: string;
     qualifications?: string;
     maximumWorkload?: number;
     availability?: string;
@@ -236,7 +258,8 @@ export const unitService = {
   create: (body: {
     code: string;
     name: string;
-    sourceDepartmentId: string;
+    sourceDepartmentId?: string;
+    sourceDepartment?: string;
     contactHours?: number;
     studentCount?: number;
     requiredExpertise?: string[];
@@ -248,57 +271,147 @@ export type ApiTeachingRequest = TeachingRequest & {
   academicUnitId: string;
   requestingDepartmentId: string;
   preferredDepartmentId: string | null;
+  courseOfferingId?: string | null;
+  createdBy?: string | null;
+  briefingNote?: string | null;
+  attachmentCount?: number;
+  messageCount?: number;
 };
+
+export type RequestAttachment = {
+  id: string;
+  teachingRequestId: string;
+  fileName: string;
+  contentType: string | null;
+  fileSizeBytes: number | null;
+  docType: string;
+  uploadedByName: string | null;
+  departmentName: string | null;
+  createdAt: string;
+};
+
+export type RequestMessage = {
+  id: string;
+  teachingRequestId: string;
+  authorName: string | null;
+  authorRole: string | null;
+  authorDepartmentName: string | null;
+  messageType: string;
+  body: string;
+  relatedLecturerId: string | null;
+  relatedLecturerName: string | null;
+  notifyAuthority: boolean;
+  createdAt: string;
+  mine: boolean;
+};
+
+export type TeachingRequestDetail = {
+  request: ApiTeachingRequest;
+  attachments: RequestAttachment[];
+  messages: RequestMessage[];
+};
+
+function mapApiRequest(r: {
+  id: string;
+  requestingDepartment: string;
+  requestingDepartmentId: string;
+  sourceDepartment: string | null;
+  preferredDepartmentId: string | null;
+  academicUnitId: string;
+  academicUnit: string;
+  studentCount: number;
+  contactHours: number;
+  requiredExpertise: string | null;
+  status: string;
+  createdAt: string;
+  courseOfferingId?: string | null;
+  createdBy?: string | null;
+  direction?: string | null;
+  briefingNote?: string | null;
+  attachmentCount?: number;
+  messageCount?: number;
+}): ApiTeachingRequest {
+  return {
+    id: r.id.slice(0, 8).toUpperCase(),
+    rawId: r.id,
+    requestingDepartment: r.requestingDepartment,
+    sourceDepartment: r.sourceDepartment || '',
+    academicUnit: r.academicUnit,
+    studentCount: r.studentCount,
+    contactHours: Number(r.contactHours),
+    requiredExpertise: r.requiredExpertise || '',
+    semester: 'Semester 1',
+    academicYear: '2026/2027',
+    status: r.status.replace(/_/g, ' '),
+    createdAt: new Date(r.createdAt).toLocaleDateString('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    }),
+    direction: (r.direction as ApiTeachingRequest['direction']) || 'outgoing',
+    academicUnitId: r.academicUnitId,
+    preferredDepartmentId: r.preferredDepartmentId,
+    requestingDepartmentId: r.requestingDepartmentId,
+    courseOfferingId: r.courseOfferingId || null,
+    createdBy: r.createdBy || null,
+    briefingNote: r.briefingNote || null,
+    attachmentCount: r.attachmentCount ?? 0,
+    messageCount: r.messageCount ?? 0,
+  };
+}
 
 export const requestService = {
   list: async (): Promise<ApiTeachingRequest[]> => {
-    const rows = await api.get<
-      {
-        id: string;
-        requestingDepartment: string;
-        requestingDepartmentId: string;
-        sourceDepartment: string | null;
-        preferredDepartmentId: string | null;
-        academicUnitId: string;
-        academicUnit: string;
-        studentCount: number;
-        contactHours: number;
-        requiredExpertise: string | null;
-        status: string;
-        createdAt: string;
-      }[]
-    >('/requests');
-    return rows.map((r) => ({
-      id: r.id.slice(0, 8).toUpperCase(),
-      rawId: r.id,
-      requestingDepartment: r.requestingDepartment,
-      sourceDepartment: r.sourceDepartment || '',
-      academicUnit: r.academicUnit,
-      studentCount: r.studentCount,
-      contactHours: Number(r.contactHours),
-      requiredExpertise: r.requiredExpertise || '',
-      semester: 'Semester 1',
-      academicYear: '2026/2027',
-      status: r.status.replace(/_/g, ' '),
-      createdAt: new Date(r.createdAt).toLocaleDateString('en-GB', {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-      }),
-      direction: 'outgoing' as const,
-      academicUnitId: r.academicUnitId,
-      preferredDepartmentId: r.preferredDepartmentId,
-      requestingDepartmentId: r.requestingDepartmentId,
-    }));
+    const rows = await api.get<Parameters<typeof mapApiRequest>[0][]>('/requests');
+    return rows.map(mapApiRequest);
+  },
+  getDetail: async (id: string): Promise<TeachingRequestDetail> => {
+    const detail = await api.get<{
+      request: Parameters<typeof mapApiRequest>[0];
+      attachments: RequestAttachment[];
+      messages: RequestMessage[];
+    }>(`/requests/${id}`);
+    return {
+      request: mapApiRequest(detail.request),
+      attachments: detail.attachments,
+      messages: detail.messages,
+    };
   },
   create: (body: {
-    requestingDepartmentId: string;
+    requestingDepartmentId?: string;
+    requestingDepartment?: string;
     preferredDepartmentId?: string | null;
-    academicUnitId: string;
+    preferredDepartment?: string | null;
+    academicUnitId?: string;
+    academicUnit?: string;
     studentCount: number;
     contactHours: number;
     requiredExpertise?: string;
-  }) => api.post('/requests', body),
+    createOffering?: boolean;
+    programme?: string;
+    contextLabel?: string;
+    briefingNote?: string;
+  }) => api.post<Parameters<typeof mapApiRequest>[0]>('/requests', body).then(mapApiRequest),
+  respond: (id: string, action: 'ACCEPT' | 'DECLINE', note?: string) =>
+    api.post(`/requests/${id}/respond`, { action, note }),
+  uploadAttachment: (id: string, file: File, docType: string = 'COURSE_OUTLINE') => {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('docType', docType);
+    return api.upload<RequestAttachment>(`/requests/${id}/attachments`, fd);
+  },
+  downloadAttachment: (attachmentId: string, fileName: string) =>
+    api.download(`/request-attachments/${attachmentId}/download`, fileName),
+  postMessage: (
+    id: string,
+    body: {
+      body: string;
+      messageType?: 'COMMENT' | 'ELIGIBILITY_NOTE' | 'AUTHORITY_NOTICE';
+      relatedLecturerId?: string;
+      relatedLecturerName?: string;
+      notifyAuthority?: boolean;
+    },
+  ) => api.post<RequestMessage>(`/requests/${id}/messages`, body),
   findCandidates: async (requestId: string) => {
     const rows = await api.post<Parameters<typeof mapCandidate>[0][]>(`/requests/${requestId}/candidates`);
     return rows.map(mapCandidate);
@@ -318,6 +431,7 @@ export const allocationService = {
     matchScore?: number;
     overrideReason?: string;
     recommendedLecturerId?: string;
+    courseOfferingId?: string;
   }) => api.post<ApiAllocation>('/allocations', body),
   submit: (id: string) => api.post(`/allocations/${id}/submit`),
   approve: (id: string, approve = true, note?: string) =>
@@ -349,7 +463,7 @@ export const organizationService = {
       unitCount: n.unitCount,
     }));
   },
-  create: (body: { name: string; type: string; parentId?: string | null }) =>
+  create: (body: { name: string; type: string; parentId?: string | null; parentName?: string | null }) =>
     api.post('/organization', body),
 };
 
@@ -367,6 +481,9 @@ export const dashboardService = {
       conflicts: number;
       crossDeptRequests: number;
       completionPct: number;
+      scopeDepartmentId?: string | null;
+      scopeDepartmentName?: string | null;
+      scopeRole?: string | null;
       recentRequests: {
         id: string;
         requestingDepartment: string;
@@ -392,6 +509,9 @@ export const dashboardService = {
         completionPct: d.completionPct,
         allocatedCount: d.allocated,
         awaitingApproval: 0,
+        scopeDepartmentId: d.scopeDepartmentId,
+        scopeDepartmentName: d.scopeDepartmentName,
+        scopeRole: d.scopeRole,
         pendingUnits: d.pending,
         conflicted: d.conflicts,
         underloaded: wl?.underloaded ?? 0,
@@ -494,41 +614,77 @@ export const timetableService = {
   }) => api.post<ApiTimetableEntry>('/timetable', body),
 };
 
+export type ImportResultSummary = {
+  allocations: number;
+  lecturers: number;
+  units: number;
+  warnings: number;
+  errors: number;
+  duplicatesSkipped: number;
+  unmappedFields: number;
+  details: string[];
+};
+
+export type MappingSuggestion = {
+  sourceColumn: string;
+  targetField: string | null;
+  confidence: number;
+  method: string;
+  sampleValues: string[];
+  unmapped: boolean;
+};
+
+export type ImportUploadResult = {
+  sessionId: string;
+  fileName: string;
+  entityType: string;
+  status: string;
+  detectedColumns: string[];
+  suggestedMap: Record<string, string>;
+  mappingSuggestions: MappingSuggestion[];
+  unmappedColumns: string[];
+  canonicalFields: string[];
+  profileApplied: string | null;
+  rowCount: number;
+  preview: Record<string, string>[];
+  warnings: string[];
+};
+
+export type ImportSession = {
+  id: string;
+  fileName: string;
+  entityType: string;
+  status: string;
+  columnMap?: string | null;
+  createdAt: string;
+  resultSummary?: ImportResultSummary | null;
+};
+
 export const importService = {
-  list: () =>
-    api.get<{ id: string; fileName: string; entityType: string; status: string; createdAt: string }[]>(
-      '/imports',
-    ),
+  list: () => api.get<ImportSession[]>('/imports'),
   create: (body: {
     fileName: string;
     entityType: string;
     columnMap?: Record<string, string>;
     rows?: Record<string, string>[];
-  }) =>
-    api.post<{ id: string; fileName: string; entityType: string; status: string; createdAt: string }>(
-      '/imports',
-      body,
-    ),
-  advance: (id: string) =>
-    api.post<{ id: string; fileName: string; entityType: string; status: string; createdAt: string }>(
-      `/imports/${id}/advance`,
-    ),
-  rows: (id: string) => api.get<Record<string, string>[]>(`/admin/imports/${id}/rows`),
+  }) => api.post<ImportSession>('/imports', body),
+  advance: (id: string) => api.post<ImportSession>(`/imports/${id}/advance`),
+  reprocess: (id: string) => api.post<ImportSession>(`/imports/${id}/reprocess`),
+  rows: (id: string) => api.get<Record<string, string>[]>(`/imports/${id}/rows`),
+  updateMapping: (
+    id: string,
+    body: {
+      columnMap: Record<string, string>;
+      entityType?: string;
+      ignoredColumns?: string[];
+      saveAsProfileName?: string;
+    },
+  ) => api.post<ImportUploadResult>(`/imports/${id}/mapping`, body),
   upload: (file: File, entityType?: string) => {
     const fd = new FormData();
     fd.append('file', file);
     const q = entityType ? `?entityType=${encodeURIComponent(entityType)}` : '';
-    return api.upload<{
-      sessionId: string;
-      fileName: string;
-      entityType: string;
-      status: string;
-      detectedColumns: string[];
-      suggestedMap: Record<string, string>;
-      rowCount: number;
-      preview: Record<string, string>[];
-      warnings: string[];
-    }>(`/imports/upload${q}`, fd);
+    return api.upload<ImportUploadResult>(`/imports/upload${q}`, fd);
   },
 };
 
@@ -573,6 +729,7 @@ export const userService = {
     name: string;
     role: string;
     organizationNodeId?: string | null;
+    organization?: string | null;
   }) =>
     api.post<{
       id: string;
@@ -583,6 +740,26 @@ export const userService = {
       token: string;
       status: string;
     }>('/admin/invitations', body),
+  assignChair: (body: { userId?: string; email?: string; departmentId?: string; department?: string }) =>
+    api.post<{
+      id: string;
+      organizationNodeId: string;
+      organizationName: string;
+      organizationType: string;
+      role: string;
+      isPrimary: boolean;
+    }>('/departments/assign-chair', body),
+  memberships: (departmentId?: string) =>
+    api.get<
+      {
+        id: string;
+        organizationNodeId: string;
+        organizationName: string;
+        organizationType: string;
+        role: string;
+        isPrimary: boolean;
+      }[]
+    >(departmentId ? `/memberships?departmentId=${encodeURIComponent(departmentId)}` : '/memberships'),
 };
 
 export const adminService = {
@@ -674,6 +851,110 @@ export const auditService = {
     api.get<{ id: string; action: string; entityType: string; entityId: string | null; details: string | null; createdAt: string }[]>(
       '/audit',
     ),
+};
+
+export type CourseOffering = {
+  id: string;
+  academicUnitId: string;
+  unitCode: string;
+  unitName: string;
+  programme: string | null;
+  contextLabel: string | null;
+  levelLabel: string | null;
+  displayTitle: string | null;
+  requestingDepartment: string | null;
+  owningDepartment: string | null;
+  status: string;
+};
+
+export type CourseOfferingDetail = {
+  offering: CourseOffering;
+  requirements: { id: string; type: string; label: string; weight: number; source: string }[];
+  outlines: {
+    id: string;
+    fileName: string;
+    contentType: string | null;
+    detectedContentType?: string | null;
+    versionNo: number;
+    extractionConfidence: number;
+    needsReview: boolean;
+    processingStatus?: string;
+    extractionMethod?: string | null;
+    processingMessage?: string | null;
+    processingErrorCode?: string | null;
+    createdAt: string;
+    hasFile: boolean;
+    warnings?: string[];
+  }[];
+};
+
+export type SuitabilityCandidate = {
+  lecturerId: string;
+  name: string;
+  department: string;
+  score: number;
+  classification: string;
+  positives: string[];
+  warnings: string[];
+  missingEvidence: string[];
+  breakdown: { key: string; label: string; earned: number; max: number }[];
+  crossDepartment: boolean;
+  load: string;
+};
+
+export const courseOfferingService = {
+  list: () => api.get<CourseOffering[]>('/course-offerings'),
+  get: (id: string) => api.get<CourseOfferingDetail>(`/course-offerings/${id}`),
+  create: (body: {
+    academicUnitId: string;
+    programme?: string;
+    contextLabel?: string;
+    levelLabel?: string;
+    displayTitle?: string;
+    requestingDepartmentId?: string | null;
+    owningDepartmentId?: string | null;
+    requirements?: { type: string; label: string; weight?: number }[];
+  }) => api.post<CourseOffering>('/course-offerings', body),
+  /** Find an existing offering for the unit, or create one for allocate-by-context. */
+  ensureForUnit: async (unit: {
+    id: string;
+    name: string;
+    sourceDepartmentId?: string | null;
+    requiredExpertise?: string[];
+  }) => {
+    const offerings = await api.get<CourseOffering[]>('/course-offerings');
+    const existing = offerings.find((o) => o.academicUnitId === unit.id);
+    if (existing) return existing;
+    return api.post<CourseOffering>('/course-offerings', {
+      academicUnitId: unit.id,
+      displayTitle: unit.name,
+      contextLabel: 'Department allocation',
+      owningDepartmentId: unit.sourceDepartmentId || null,
+      requirements: (unit.requiredExpertise || [])
+        .map((label) => label.trim())
+        .filter(Boolean)
+        .map((label) => ({ type: 'EXPERTISE', label })),
+    });
+  },
+  suitability: (id: string) => api.get<SuitabilityCandidate[]>(`/course-offerings/${id}/suitability`),
+  allocate: (body: { courseOfferingId: string; lecturerId: string; decisionNote?: string }) =>
+    api.post('/course-offerings/allocate', body),
+  uploadOutline: (id: string, file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return api.upload<{
+      id: string;
+      fileName: string;
+      versionNo: number;
+      extractionConfidence: number;
+      needsReview: boolean;
+      processingStatus?: string;
+      extractionMethod?: string | null;
+      processingMessage?: string | null;
+      processingErrorCode?: string | null;
+      warnings?: string[];
+    }>(`/course-offerings/${id}/outline`, fd);
+  },
 };
 
 export const reportService = {

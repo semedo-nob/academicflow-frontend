@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { ACTIVITY, DASHBOARD_STATS, REQUESTS } from '../data/mockData';
-import { dashboardService } from '../services';
+import { useApp } from '../context/AppContext';
+import { dashboardService, organizationService, userService } from '../services';
 import { useAsyncData } from '../hooks/useAsyncData';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
@@ -14,6 +15,9 @@ import {
   IconUsers,
 } from '../components/ui/Icons';
 import type { ReactNode } from 'react';
+import { useEffect, useState } from 'react';
+import { normalizeRole } from '../lib/access';
+import { isSetupSkipped, needsInstitutionSetup } from '../lib/setup';
 
 function Kpi({
   icon,
@@ -81,14 +85,38 @@ function WlBar({ label, count, total, color }: { label: string; count: number; t
 
 export function DashboardPage() {
   const navigate = useNavigate();
+  const { user, period } = useApp();
+  const [deptTick, setDeptTick] = useState(0);
+  useEffect(() => {
+    const onChange = () => setDeptTick((t) => t + 1);
+    window.addEventListener('af-department-changed', onChange);
+    return () => window.removeEventListener('af-department-changed', onChange);
+  }, []);
   const { data } = useAsyncData(
     () => dashboardService.get(),
     { stats: DASHBOARD_STATS, activity: ACTIVITY, requests: REQUESTS.slice(0, 3) },
-    [],
+    [deptTick, user.activeDepartmentId],
+  );
+  const { data: setupHint } = useAsyncData(
+    async () => {
+      if (normalizeRole(user.role) !== 'INSTITUTION_ADMIN' || isSetupSkipped()) {
+        return { show: false };
+      }
+      const [orgs, memberships] = await Promise.all([
+        organizationService.list(),
+        userService.memberships(),
+      ]);
+      return { show: needsInstitutionSetup(orgs, memberships) };
+    },
+    { show: false },
+    [user.role, deptTick],
   );
   const s = data.stats;
   const recent = data.requests.slice(0, 3);
   const activity = data.activity;
+  const deptTitle =
+    s.scopeDepartmentName || user.activeDepartmentName || user.departmentName || 'Department';
+  const greetingName = user.name.split(' ')[0] || user.name;
 
   const attn = (
     tone: 'danger' | 'warn' | 'info',
@@ -124,13 +152,28 @@ export function DashboardPage() {
       <div className="page-head">
         <div>
           <p className="page-sub" style={{ marginBottom: 4 }}>
-            Good morning, Dr. Wanjiku
+            Good morning, {greetingName}
           </p>
-          <h1 className="page-title">Computer Science Department</h1>
-          <p className="page-sub">2026/2027 · Semester 1</p>
+          <h1 className="page-title">{deptTitle}</h1>
+          <p className="page-sub">
+            {period.academicYearLabel} · {period.semesterName}
+            {s.scopeRole ? ` · ${String(s.scopeRole).replace(/_/g, ' ')}` : ''}
+          </p>
         </div>
         <Badge status="Allocation cycle: In progress" style={{ padding: '6px 12px', fontSize: 12.5 }} />
       </div>
+
+      {setupHint.show && (
+        <div className="setup-banner">
+          <p>
+            Finish institution setup: create departments and invite one chair account per department so
+            cross-department requests work.
+          </p>
+          <Button variant="primary" onClick={() => navigate('/onboarding')}>
+            Continue setup
+          </Button>
+        </div>
+      )}
 
       <div className="kpi-grid">
         <Kpi icon={<IconUsers />} label="Total Lecturers" value={s.totalLecturers} />

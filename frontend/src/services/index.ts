@@ -19,5 +19,21 @@ export {
   adminService,
   searchService,
   exportService,
+  courseOfferingService,
 } from './lecturerService';
-export type { ApiAllocation, ApiTimetableEntry, ApiWorkloadSummary, ApiTeachingRequest } from './lecturerService';
+export type {
+  ApiAllocation,
+  ApiTimetableEntry,
+  ApiWorkloadSummary,
+  ApiTeachingRequest,
+  RequestAttachment,
+  RequestMessage,
+  TeachingRequestDetail,
+  ImportUploadResult,
+  ImportResultSummary,
+  MappingSuggestion,
+  ImportSession,
+  CourseOffering,
+  CourseOfferingDetail,
+  SuitabilityCandidate,
+} from './lecturerService';

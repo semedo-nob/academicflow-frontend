@@ -14,10 +14,12 @@ import { UnitsPage } from './pages/UnitsPage';
 import { RequestsPage } from './pages/RequestsPage';
 import { RecommendationsPage } from './pages/RecommendationsPage';
 import { AllocationPage } from './pages/AllocationPage';
+import { AllocateOfferingPage } from './pages/AllocateOfferingPage';
 import { WorkloadPage } from './pages/WorkloadPage';
 import { TimetablePage } from './pages/TimetablePage';
 import { ConflictsPage } from './pages/ConflictsPage';
 import { ApprovalsPage } from './pages/ApprovalsPage';
+import { OnboardingPage } from './pages/OnboardingPage';
 import { ImportPage } from './pages/ImportPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { AdminPage } from './pages/AdminPage';
@@ -108,11 +110,13 @@ export default function App() {
               }
             >
               <Route path="/dashboard" element={<InstitutionGate><DashboardPage /></InstitutionGate>} />
+              <Route path="/onboarding" element={<InstitutionGate><OnboardingPage /></InstitutionGate>} />
               <Route path="/organization" element={<InstitutionGate><OrganizationPage /></InstitutionGate>} />
               <Route path="/lecturers" element={<InstitutionGate><LecturersPage /></InstitutionGate>} />
               <Route path="/units" element={<InstitutionGate><UnitsPage /></InstitutionGate>} />
               <Route path="/requests" element={<InstitutionGate><RequestsPage /></InstitutionGate>} />
               <Route path="/recommendations" element={<InstitutionGate><RecommendationsPage /></InstitutionGate>} />
+              <Route path="/allocate-context" element={<InstitutionGate><AllocateOfferingPage /></InstitutionGate>} />
               <Route path="/allocation" element={<InstitutionGate><AllocationPage /></InstitutionGate>} />
               <Route path="/workload" element={<InstitutionGate><WorkloadPage /></InstitutionGate>} />
               <Route path="/timetable" element={<InstitutionGate><TimetablePage /></InstitutionGate>} />
