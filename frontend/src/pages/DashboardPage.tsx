@@ -1,5 +1,4 @@
 import { useNavigate } from 'react-router-dom';
-import { ACTIVITY, DASHBOARD_STATS, REQUESTS } from '../data/mockData';
 import { useApp } from '../context/AppContext';
 import { dashboardService, organizationService, userService } from '../services';
 import { useAsyncData } from '../hooks/useAsyncData';
@@ -17,7 +16,8 @@ import {
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { normalizeRole } from '../lib/access';
-import { isSetupSkipped, needsInstitutionSetup } from '../lib/setup';
+import { markSetupComplete, needsInstitutionSetup, shouldShowSetupBanner } from '../lib/setup';
+import type { TeachingRequest } from '../types';
 
 function Kpi({
   icon,
@@ -92,23 +92,63 @@ export function DashboardPage() {
     window.addEventListener('af-department-changed', onChange);
     return () => window.removeEventListener('af-department-changed', onChange);
   }, []);
+  const emptyDash = {
+    stats: {
+      totalLecturers: 0,
+      academicUnits: 0,
+      allocated: 0,
+      pending: 0,
+      conflicts: 0,
+      crossDeptRequests: 0,
+      completionPct: 0,
+      allocatedCount: 0,
+      awaitingApproval: 0,
+      pendingUnits: 0,
+      conflicted: 0,
+      underloaded: 0,
+      optimal: 0,
+      nearLimit: 0,
+      overloaded: 0,
+      scopeDepartmentId: null as string | null,
+      scopeDepartmentName: null as string | null,
+      scopeRole: null as string | null,
+    },
+    activity: [] as { text: string; time: string }[],
+    requests: [] as TeachingRequest[],
+  };
   const { data } = useAsyncData(
     () => dashboardService.get(),
-    { stats: DASHBOARD_STATS, activity: ACTIVITY, requests: REQUESTS.slice(0, 3) },
+    emptyDash,
     [deptTick, user.activeDepartmentId],
   );
   const { data: setupHint } = useAsyncData(
     async () => {
-      if (normalizeRole(user.role) !== 'INSTITUTION_ADMIN' || isSetupSkipped()) {
-        return { show: false };
+      if (normalizeRole(user.role) !== 'INSTITUTION_ADMIN') {
+        return { show: false, needing: 0 };
       }
-      const [orgs, memberships] = await Promise.all([
+      const [orgs, memberships, invitations] = await Promise.all([
         organizationService.list(),
         userService.memberships(),
+        userService.invitations(),
       ]);
-      return { show: needsInstitutionSetup(orgs, memberships) };
+      const pendingChairDeptIds = invitations
+        .filter(
+          (i) =>
+            i.status === 'PENDING' &&
+            i.role.toUpperCase() === 'DEPARTMENT_CHAIR' &&
+            i.organizationNodeId,
+        )
+        .map((i) => i.organizationNodeId as string);
+      const needing = needsInstitutionSetup(orgs, memberships, pendingChairDeptIds);
+      if (!needing) markSetupComplete();
+      return {
+        show: shouldShowSetupBanner(orgs, memberships, pendingChairDeptIds),
+        needing: needing
+          ? orgs.filter((o) => o.type === 'Department').length
+          : 0,
+      };
     },
-    { show: false },
+    { show: false, needing: 0 },
     [user.role, deptTick],
   );
   const s = data.stats;
@@ -167,7 +207,7 @@ export function DashboardPage() {
         <div className="setup-banner">
           <p>
             Finish institution setup: create departments and invite one chair account per department so
-            cross-department requests work.
+            cross-department requests work. Open <b>Institution setup</b> in the sidebar anytime.
           </p>
           <Button variant="primary" onClick={() => navigate('/onboarding')}>
             Continue setup

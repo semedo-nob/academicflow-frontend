@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { LECTURERS } from '../data/mockData';
 import { useApp } from '../context/AppContext';
 import { useFeedback } from '../context/FeedbackContext';
 import { useAsyncData } from '../hooks/useAsyncData';
@@ -81,7 +80,11 @@ export function LecturersPage() {
   const { openDrawer, closeDrawer } = useApp();
   const { error: notifyError, success } = useFeedback();
   const [tick, setTick] = useState(0);
-  const { data: lecturers, fromApi } = useAsyncData(() => lecturerService.list(), LECTURERS, [tick]);
+  const { data: lecturers, fromApi } = useAsyncData(
+    () => lecturerService.list(),
+    [],
+    [tick],
+  );
   const { data: orgs } = useAsyncData(() => organizationService.list(), [], []);
   const depts = orgs.filter((o) => o.type === 'Department');
   const [showAdd, setShowAdd] = useState(false);

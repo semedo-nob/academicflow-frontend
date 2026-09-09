@@ -4,7 +4,7 @@ import { useApp } from '../context/AppContext';
 import { useFeedback } from '../context/FeedbackContext';
 import { useAsyncData } from '../hooks/useAsyncData';
 import { organizationService, userService } from '../services';
-import { canManageInstitutions, homePath, normalizeRole } from '../lib/access';
+import { homePath, normalizeRole } from '../lib/access';
 import {
   isSetupSkipped,
   markSetupComplete,
@@ -14,38 +14,51 @@ import {
 import { Button } from '../components/ui/Button';
 import { PageHead } from '../components/ui/Drawer';
 import { SuggestInput } from '../components/ui/SuggestInput';
+import type { OrganizationNode } from '../types';
 
 type ChairDraft = { name: string; email: string };
+
+const STEPS = ['Schools', 'Departments', 'Department chairs', 'Done'] as const;
 
 export function OnboardingPage() {
   const navigate = useNavigate();
   const { user } = useApp();
-  const { error: notifyError, success } = useFeedback();
+  const { error: notifyError, success, confirm } = useFeedback();
   const role = normalizeRole(user.role);
   const [step, setStep] = useState(0);
   const [tick, setTick] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [schoolName, setSchoolName] = useState('');
+  const [schoolParent, setSchoolParent] = useState('');
   const [deptName, setDeptName] = useState('');
   const [parentName, setParentName] = useState('');
   const [chairDrafts, setChairDrafts] = useState<Record<string, ChairDraft>>({});
   const [lastInviteLinks, setLastInviteLinks] = useState<{ dept: string; path: string }[]>([]);
+  const [menuId, setMenuId] = useState<string | null>(null);
 
   const { data: orgs, loading: orgsLoading } = useAsyncData(() => organizationService.list(), [], [tick]);
   const { data: memberships } = useAsyncData(() => userService.memberships(), [], [tick]);
   const { data: invitations } = useAsyncData(() => userService.invitations(), [], [tick]);
 
-  const depts = useMemo(() => orgs.filter((o) => o.type === 'Department'), [orgs]);
-  const schools = useMemo(
-    () => orgs.filter((o) => o.type === 'School' || o.type === 'Faculty' || o.type === 'College'),
+  const universities = useMemo(
+    () => orgs.filter((o) => o.type === 'University' || o.type === 'College'),
     [orgs],
   );
+  const schools = useMemo(
+    () => orgs.filter((o) => o.type === 'School' || o.type === 'Faculty'),
+    [orgs],
+  );
+  const depts = useMemo(() => orgs.filter((o) => o.type === 'Department'), [orgs]);
+  const parentOptions = useMemo(() => [...universities, ...schools], [universities, schools]);
+
+  const nameById = useMemo(() => new Map(orgs.map((o) => [o.id, o.name])), [orgs]);
+
   const chairByDept = useMemo(() => {
-    const set = new Set(
+    return new Set(
       memberships
         .filter((m) => m.role.toUpperCase() === 'DEPARTMENT_CHAIR')
         .map((m) => m.organizationNodeId),
     );
-    return set;
   }, [memberships]);
   const pendingInviteDepts = useMemo(() => {
     return new Set(
@@ -67,18 +80,63 @@ export function OnboardingPage() {
     });
   }, [deptsNeedingChair.map((d) => d.id).join(',')]);
 
-  if (canManageInstitutions(role) || role !== 'INSTITUTION_ADMIN') {
+  if (role !== 'INSTITUTION_ADMIN') {
     return <Navigate to={homePath(role)} replace />;
   }
 
-  const ready =
-    depts.length > 0 && (deptsNeedingChair.length === 0 || depts.every((d) => chairByDept.has(d.id)));
+  const ready = depts.length > 0 && deptsNeedingChair.length === 0;
 
   useEffect(() => {
     if (ready && !isSetupSkipped()) {
       markSetupComplete();
     }
   }, [ready]);
+
+  const removeNode = async (node: OrganizationNode, cascade = false) => {
+    const label = `${node.type} “${node.name}”`;
+    const ok = await confirm({
+      title: cascade ? 'Delete with children' : 'Delete node',
+      message: cascade
+        ? `Delete ${label} and its empty child nodes? Nodes with lecturers or units cannot be removed.`
+        : `Delete ${label}? Child nodes must be removed first (or choose cascade).`,
+      confirmLabel: cascade ? 'Delete subtree' : 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
+    setBusy(true);
+    setMenuId(null);
+    try {
+      await organizationService.delete(node.id, cascade);
+      setTick((t) => t + 1);
+      success(`${node.name} deleted`);
+    } catch (e) {
+      notifyError(e instanceof Error ? e.message : 'Could not delete node');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addSchool = async () => {
+    if (!schoolName.trim()) {
+      notifyError('Enter a school or faculty name');
+      return;
+    }
+    setBusy(true);
+    try {
+      await organizationService.create({
+        name: schoolName.trim(),
+        type: 'School',
+        parentName: schoolParent.trim() || universities[0]?.name || null,
+      });
+      setSchoolName('');
+      setTick((t) => t + 1);
+      success(`School “${schoolName.trim()}” created`);
+    } catch (e) {
+      notifyError(e instanceof Error ? e.message : 'Could not create school');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const addDepartment = async () => {
     if (!deptName.trim()) {
@@ -90,7 +148,7 @@ export function OnboardingPage() {
       await organizationService.create({
         name: deptName.trim(),
         type: 'Department',
-        parentName: parentName.trim() || null,
+        parentName: parentName.trim() || schools[0]?.name || universities[0]?.name || null,
       });
       setDeptName('');
       setTick((t) => t + 1);
@@ -123,7 +181,10 @@ export function OnboardingPage() {
           organization: d.name,
           organizationNodeId: d.id,
         });
-        links.push({ dept: d.name, path: res.invitePath });
+        links.push({ dept: d.name, path: res.invitePath || '' });
+        if (!res.invitePath) {
+          notifyError(res.message || `Invite for ${d.name} created but no link was returned`);
+        }
       }
       setLastInviteLinks(links);
       setTick((t) => t + 1);
@@ -141,15 +202,50 @@ export function OnboardingPage() {
     navigate('/dashboard');
   };
 
+  const nodeRow = (node: OrganizationNode, extra?: string) => (
+    <li key={node.id} className="onboard-node-row">
+      <div>
+        <b>{node.name}</b>
+        <span className="cell-sub">
+          {node.type}
+          {node.parentId ? ` · under ${nameById.get(node.parentId) || 'parent'}` : ''}
+          {extra ? ` · ${extra}` : ''}
+        </span>
+      </div>
+      <div className="onboard-node-actions">
+        <Button
+          size="sm"
+          disabled={busy}
+          onClick={() => setMenuId((id) => (id === node.id ? null : node.id))}
+        >
+          Options
+        </Button>
+        {menuId === node.id && (
+          <div className="node-menu">
+            <button type="button" onClick={() => void removeNode(node, false)}>
+              Delete
+            </button>
+            <button type="button" onClick={() => void removeNode(node, true)}>
+              Delete with empty children
+            </button>
+            <button type="button" onClick={() => setMenuId(null)}>
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+    </li>
+  );
+
   return (
     <>
       <PageHead
         title="Set up your institution"
-        subtitle="Create departments and invite one chair account per department so cross-department requests and scoped allocation work."
+        subtitle="Create schools and affiliated departments, then invite one chair account per department."
       />
 
       <div className="onboard-steps">
-        {['Departments', 'Department chairs', 'Done'].map((label, i) => (
+        {STEPS.map((label, i) => (
           <button
             key={label}
             type="button"
@@ -164,27 +260,66 @@ export function OnboardingPage() {
 
       {step === 0 && (
         <div className="card card-pad">
-          <h3 style={{ marginTop: 0 }}>Create departments</h3>
+          <h3 style={{ marginTop: 0 }}>Create schools / faculties</h3>
           <p className="section-sub">
-            Each department gets its own chair account. You can add more later from Organization.
+            Schools sit under the university. Affiliated departments are added in the next step.
           </p>
           {orgsLoading && <p className="section-sub">Loading organization…</p>}
+          {schools.length === 0 ? (
+            <p className="section-sub">No schools yet — add your first one below.</p>
+          ) : (
+            <ul className="onboard-list">{schools.map((s) => nodeRow(s))}</ul>
+          )}
+          <div className="field" style={{ marginTop: 16 }}>
+            <label>School / faculty name</label>
+            <input
+              value={schoolName}
+              onChange={(e) => setSchoolName(e.target.value)}
+              placeholder="e.g. School of Computing"
+            />
+          </div>
+          {universities.length > 0 && (
+            <div className="field">
+              <label>Parent university (optional)</label>
+              <SuggestInput
+                id="onboard-school-parent"
+                value={schoolParent}
+                onChange={setSchoolParent}
+                options={universities.map((u) => ({ value: u.id, label: u.name }))}
+                placeholder={universities[0]?.name || 'University…'}
+              />
+            </div>
+          )}
+          <div className="btn-row">
+            <Button variant="primary" disabled={busy} onClick={() => void addSchool()}>
+              Add school
+            </Button>
+            <Button onClick={() => setStep(1)}>Continue to departments</Button>
+          </div>
+        </div>
+      )}
+
+      {step === 1 && (
+        <div className="card card-pad">
+          <h3 style={{ marginTop: 0 }}>Create affiliated departments</h3>
+          <p className="section-sub">
+            Each department belongs under a school (or the university if you skipped schools). Click Options to remove
+            a mistaken node.
+          </p>
           {depts.length === 0 ? (
             <p className="section-sub">No departments yet — add your first one below.</p>
           ) : (
             <ul className="onboard-list">
-              {depts.map((d) => (
-                <li key={d.id}>
-                  <b>{d.name}</b>
-                  <span className="cell-sub">
-                    {chairByDept.has(d.id)
-                      ? 'Chair assigned'
-                      : pendingInviteDepts.has(d.id)
-                        ? 'Invite pending'
-                        : 'Needs chair'}
-                  </span>
-                </li>
-              ))}
+              {depts.map((d) =>
+                nodeRow(
+                  d,
+                  chairByDept.has(d.id)
+                    ? 'Chair assigned'
+                    : pendingInviteDepts.has(d.id)
+                      ? 'Invite pending'
+                      : 'Needs chair',
+                ),
+              )}
             </ul>
           )}
           <div className="field" style={{ marginTop: 16 }}>
@@ -195,30 +330,31 @@ export function OnboardingPage() {
               placeholder="e.g. Computer Science"
             />
           </div>
-          {schools.length > 0 && (
+          {parentOptions.length > 0 && (
             <div className="field">
-              <label>Parent school / faculty (optional)</label>
+              <label>Parent school / faculty</label>
               <SuggestInput
                 id="onboard-parent"
                 value={parentName}
                 onChange={setParentName}
-                options={schools.map((s) => ({ value: s.id, label: s.name }))}
-                placeholder="Type parent name…"
+                options={parentOptions.map((s) => ({ value: s.id, label: `${s.name} (${s.type})` }))}
+                placeholder={schools[0]?.name || 'Type parent name…'}
               />
             </div>
           )}
           <div className="btn-row">
+            <Button onClick={() => setStep(0)}>Back</Button>
             <Button variant="primary" disabled={busy} onClick={() => void addDepartment()}>
               Add department
             </Button>
-            <Button disabled={depts.length === 0} onClick={() => setStep(1)}>
+            <Button disabled={depts.length === 0} onClick={() => setStep(2)}>
               Continue to chairs
             </Button>
           </div>
         </div>
       )}
 
-      {step === 1 && (
+      {step === 2 && (
         <div className="card card-pad">
           <h3 style={{ marginTop: 0 }}>Invite department chairs</h3>
           <p className="section-sub">
@@ -226,7 +362,10 @@ export function OnboardingPage() {
           </p>
           {depts.length === 0 && (
             <p className="section-sub">
-              Add departments first. <button type="button" className="linkish" onClick={() => setStep(0)}>Go back</button>
+              Add departments first.{' '}
+              <button type="button" className="linkish" onClick={() => setStep(1)}>
+                Go back
+              </button>
             </p>
           )}
           {deptsNeedingChair.length === 0 && depts.length > 0 ? (
@@ -234,7 +373,12 @@ export function OnboardingPage() {
           ) : (
             deptsNeedingChair.map((d) => (
               <div key={d.id} className="onboard-chair-card">
-                <div style={{ fontWeight: 700, marginBottom: 8 }}>{d.name}</div>
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>
+                  {d.name}
+                  {d.parentId ? (
+                    <span className="cell-sub"> · {nameById.get(d.parentId)}</span>
+                  ) : null}
+                </div>
                 <div className="field">
                   <label>Chair name</label>
                   <input
@@ -290,18 +434,18 @@ export function OnboardingPage() {
             </div>
           )}
           <div className="btn-row" style={{ marginTop: 16 }}>
-            <Button onClick={() => setStep(0)}>Back</Button>
+            <Button onClick={() => setStep(1)}>Back</Button>
             {deptsNeedingChair.length > 0 && (
               <Button variant="primary" disabled={busy} onClick={() => void inviteChairs()}>
                 {busy ? 'Sending…' : 'Send chair invites'}
               </Button>
             )}
-            <Button onClick={() => setStep(2)}>Continue</Button>
+            <Button onClick={() => setStep(3)}>Continue</Button>
           </div>
         </div>
       )}
 
-      {step === 2 && (
+      {step === 3 && (
         <div className="card card-pad">
           <h3 style={{ marginTop: 0 }}>You are ready</h3>
           <p className="section-sub">
@@ -309,6 +453,9 @@ export function OnboardingPage() {
             allocation timetable, and allocate by workload and expertise.
           </p>
           <ul className="onboard-list">
+            <li>
+              <b>{schools.length}</b> <span className="cell-sub">schools / faculties</span>
+            </li>
             <li>
               <b>{depts.length}</b> <span className="cell-sub">departments</span>
             </li>
@@ -327,10 +474,10 @@ export function OnboardingPage() {
             <Button
               onClick={() => {
                 markSetupComplete();
-                navigate('/admin');
+                navigate('/organization');
               }}
             >
-              Open Administration
+              Open Organization
             </Button>
           </div>
         </div>
@@ -341,7 +488,7 @@ export function OnboardingPage() {
           Skip for now
         </button>
         {' · '}
-        You can finish this anytime from Administration or Organization.
+        Re-open anytime from the sidebar: <b>Institution setup</b>, or Organization → Invite chairs.
       </p>
     </>
   );
@@ -351,13 +498,23 @@ export function OnboardingPage() {
 export async function resolvePostLoginPath(role: string): Promise<string> {
   const r = normalizeRole(role);
   if (r !== 'INSTITUTION_ADMIN') return homePath(r);
-  if (isSetupSkipped()) return homePath(r);
   try {
-    const [orgs, memberships] = await Promise.all([
+    const [orgs, memberships, invitations] = await Promise.all([
       organizationService.list(),
       userService.memberships(),
+      userService.invitations(),
     ]);
-    if (needsInstitutionSetup(orgs, memberships)) return '/onboarding';
+    const pendingChairDeptIds = invitations
+      .filter(
+        (i) =>
+          i.status === 'PENDING' &&
+          i.role.toUpperCase() === 'DEPARTMENT_CHAIR' &&
+          i.organizationNodeId,
+      )
+      .map((i) => i.organizationNodeId as string);
+    if (needsInstitutionSetup(orgs, memberships, pendingChairDeptIds)) {
+      return '/onboarding';
+    }
     markSetupComplete();
   } catch {
     /* stay on dashboard if APIs fail */

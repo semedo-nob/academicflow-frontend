@@ -40,7 +40,10 @@ class AcademicFlowService(
     private val mappingRepo: ImportMappingProfileRepository,
     private val courseOfferingService: CourseOfferingService,
     private val scopeService: ScopeService,
-    private val membershipRepo: OrganizationMembershipRepository
+    private val membershipRepo: OrganizationMembershipRepository,
+    private val invitationRepo: InvitationRepository,
+    private val permissionService: com.academicflow.service.permission.PermissionService,
+    private val allocationCommentRepo: AllocationCommentRepository
 ) {
 
     fun login(req: LoginRequest): LoginResponse {
@@ -199,12 +202,288 @@ class AcademicFlowService(
     @Transactional
     fun createOrgNode(req: CreateOrgNodeRequest): OrganizationNodeDto {
         val tenantId = TenantContext.get()
+        requireInstitutionOrgManage()
         val parentId = resolveOrgParentId(tenantId, req.parentId, req.parentName)
+        val type = normalizeOrgType(req.type)
+        val name = req.name.trim()
+        if (name.isEmpty()) throw IllegalArgumentException("Name is required")
         val node = orgRepo.save(
-            OrganizationNode(tenantId = tenantId, name = req.name.trim(), type = req.type.trim().ifBlank { "Department" }, parentId = parentId)
+            OrganizationNode(tenantId = tenantId, name = name, type = type, parentId = parentId)
         )
         audit("Organization node created", "OrganizationNode", node.id.toString(), req.name)
         return OrganizationNodeDto(node.id, node.tenantId, node.name, node.type, node.parentId)
+    }
+
+    @Transactional
+    fun updateOrgNode(id: UUID, req: UpdateOrgNodeRequest): OrganizationNodeDto {
+        val tenantId = TenantContext.get()
+        requireInstitutionOrgManage()
+        val node = orgRepo.findByTenantIdAndId(tenantId, id)
+            ?: throw NoSuchElementException("Organization node not found")
+        req.name?.trim()?.takeIf { it.isNotEmpty() }?.let { node.name = it }
+        req.type?.let { node.type = normalizeOrgType(it) }
+        when {
+            req.clearParent -> node.parentId = null
+            req.parentId != null || !req.parentName.isNullOrBlank() -> {
+                val newParent = resolveOrgParentId(tenantId, req.parentId, req.parentName)
+                if (newParent == node.id) {
+                    throw IllegalArgumentException("A node cannot be its own parent")
+                }
+                if (newParent != null && wouldCreateCycle(tenantId, node.id, newParent)) {
+                    throw IllegalArgumentException("Parent change would create a cycle in the organization tree")
+                }
+                node.parentId = newParent
+            }
+        }
+        orgRepo.save(node)
+        audit("Organization node updated", "OrganizationNode", node.id.toString(), "${node.name} (${node.type})")
+        return OrganizationNodeDto(node.id, node.tenantId, node.name, node.type, node.parentId)
+    }
+
+    /**
+     * Delete an org node created by mistake.
+     * - Without cascade: node must have no children and no lecturers/units.
+     * - With cascade: deletes empty descendant tree depth-first; still refuses if any node has lecturers/units.
+     * Pending invitations and memberships for deleted nodes are cleaned up.
+     */
+    @Transactional
+    fun deleteOrgNode(id: UUID, cascade: Boolean = false) {
+        requireInstitutionOrgManage()
+        val tenantId = TenantContext.get()
+        val node = orgRepo.findByTenantIdAndId(tenantId, id)
+            ?: throw NoSuchElementException("Organization node not found")
+
+        val all = orgRepo.findByTenantIdOrderByNameAsc(tenantId)
+        if (node.type.equals("University", ignoreCase = true) &&
+            all.none { it.id != node.id && it.type.equals("University", ignoreCase = true) }
+        ) {
+            throw IllegalArgumentException("Cannot delete the only University root. Rename it instead.")
+        }
+
+        val toDelete = if (cascade) {
+            collectDescendantsIncludingSelf(all, id)
+        } else {
+            val children = all.filter { it.parentId == id }
+            if (children.isNotEmpty()) {
+                throw IllegalArgumentException(
+                    "Node has ${children.size} child node(s). Delete children first, or use cascade=true to remove the empty subtree."
+                )
+            }
+            listOf(node)
+        }
+
+        val lecturers = lecturerRepo.findByTenantIdOrderByFullNameAsc(tenantId)
+        val units = unitRepo.findByTenantIdOrderByCodeAsc(tenantId)
+        for (n in toDelete) {
+            val lecturerCount = lecturers.count { it.organizationNodeId == n.id }
+            val unitCount = units.count { it.sourceDepartmentId == n.id }
+            if (lecturerCount > 0 || unitCount > 0) {
+                throw IllegalArgumentException(
+                    "Cannot delete '${n.name}': it still has $lecturerCount lecturer(s) and $unitCount unit(s). Move or remove them first."
+                )
+            }
+        }
+
+        val ordered = toDelete.sortedByDescending { depthOf(all, it.id) }
+        for (n in ordered) {
+            membershipRepo.findByTenantIdAndOrganizationNodeId(tenantId, n.id).forEach { membershipRepo.delete(it) }
+            invitationRepo.findByTenantIdOrderByCreatedAtDesc(tenantId)
+                .filter { it.organizationNodeId == n.id }
+                .forEach {
+                    if (it.status == "PENDING") it.status = "REVOKED"
+                    it.organizationNodeId = null
+                    invitationRepo.save(it)
+                }
+            userRepo.findByTenantIdOrderByFullNameAsc(tenantId)
+                .filter { it.organizationNodeId == n.id }
+                .forEach {
+                    it.organizationNodeId = null
+                    userRepo.save(it)
+                }
+            orgRepo.delete(n)
+            audit("Organization node deleted", "OrganizationNode", n.id.toString(), "${n.name} (${n.type})")
+        }
+    }
+
+    private fun collectDescendantsIncludingSelf(all: List<OrganizationNode>, rootId: UUID): List<OrganizationNode> {
+        val byParent = all.groupBy { it.parentId }
+        val out = mutableListOf<OrganizationNode>()
+        fun walk(id: UUID) {
+            byParent[id].orEmpty().forEach { walk(it.id) }
+            all.firstOrNull { it.id == id }?.let { out.add(it) }
+        }
+        walk(rootId)
+        return out
+    }
+
+    private fun depthOf(all: List<OrganizationNode>, id: UUID): Int {
+        var depth = 0
+        var cur = all.firstOrNull { it.id == id }
+        val seen = mutableSetOf<UUID>()
+        while (cur?.parentId != null && seen.add(cur.id)) {
+            depth++
+            cur = all.firstOrNull { it.id == cur!!.parentId }
+        }
+        return depth
+    }
+
+    /**
+     * Upsert organization nodes from CSV text.
+     * Expected headers (flexible): name, type, parentName | parent
+     * Optional: id (UUID) for update-by-id.
+     * Rows are applied top-to-bottom; parents should appear before children when creating.
+     */
+    @Transactional
+    fun importOrganizationNodes(csvText: String): OrganizationImportResultDto {
+        val tenantId = TenantContext.get()
+        requireInstitutionOrgManage()
+        val lines = csvText.lines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
+        if (lines.isEmpty()) throw IllegalArgumentException("Empty organization import file")
+        val headerCells = splitCsvLine(lines.first()).map { it.trim().lowercase() }
+        val dataLines = if (headerCells.any { it.contains("name") || it == "type" || it.contains("parent") }) {
+            lines.drop(1)
+        } else {
+            lines
+        }
+        fun col(row: List<String>, vararg keys: String): String? {
+            keys.forEach { key ->
+                val idx = headerCells.indexOfFirst { it == key || it.replace(" ", "") == key.replace(" ", "") }
+                if (idx >= 0 && idx < row.size) return row[idx].trim().takeIf { it.isNotEmpty() }
+            }
+            // positional fallback: name, type, parent
+            return null
+        }
+
+        var created = 0
+        var updated = 0
+        var skipped = 0
+        var errors = 0
+        val details = mutableListOf<String>()
+        val existing = orgRepo.findByTenantIdOrderByNameAsc(tenantId).toMutableList()
+
+        dataLines.forEachIndexed { index, line ->
+            val rowNum = index + 2
+            val cells = splitCsvLine(line)
+            try {
+                val idRaw = col(cells, "id", "nodeid", "uuid")
+                    ?: cells.getOrNull(headerCells.indexOf("id"))?.takeIf { headerCells.contains("id") }
+                val name = col(cells, "name", "node", "department", "school", "unit")
+                    ?: cells.getOrNull(0)?.trim()?.takeIf { it.isNotEmpty() }
+                val typeRaw = col(cells, "type", "nodetype", "level")
+                    ?: cells.getOrNull(1)?.trim()
+                val parentName = col(cells, "parentname", "parent", "parentnode", "schoolparent")
+                    ?: if (headerCells.isEmpty() || !headerCells.any { it.contains("name") }) cells.getOrNull(2)?.trim() else null
+
+                if (name.isNullOrBlank()) {
+                    skipped++
+                    details += "Row $rowNum: missing name"
+                    return@forEachIndexed
+                }
+                val type = normalizeOrgType(typeRaw ?: "Department")
+                val byId = idRaw?.let { runCatching { UUID.fromString(it.trim()) }.getOrNull() }
+                    ?.let { id -> existing.firstOrNull { it.id == id } }
+                val match = byId
+                    ?: existing.firstOrNull { it.name.equals(name, true) && it.type.equals(type, true) }
+                    ?: existing.firstOrNull { it.name.equals(name, true) }
+
+                val parentId = if (!parentName.isNullOrBlank()) {
+                    resolveOrgParentId(tenantId, null, parentName)
+                        ?: existing.firstOrNull { it.name.equals(parentName, true) }?.id
+                } else null
+
+                if (match != null) {
+                    match.name = name
+                    match.type = type
+                    if (!parentName.isNullOrBlank()) {
+                        if (parentId == match.id) throw IllegalArgumentException("Node cannot parent itself")
+                        if (parentId != null && wouldCreateCycle(tenantId, match.id, parentId)) {
+                            throw IllegalArgumentException("Parent would create a cycle")
+                        }
+                        match.parentId = parentId
+                    }
+                    orgRepo.save(match)
+                    updated++
+                } else {
+                    val saved = orgRepo.save(
+                        OrganizationNode(
+                            tenantId = tenantId,
+                            name = name,
+                            type = type,
+                            parentId = parentId
+                        )
+                    )
+                    existing.add(saved)
+                    created++
+                }
+            } catch (ex: Exception) {
+                errors++
+                details += "Row $rowNum: ${ex.message ?: "failed"}"
+            }
+        }
+        audit(
+            "Organization import",
+            "OrganizationNode",
+            null,
+            "created=$created updated=$updated skipped=$skipped errors=$errors"
+        )
+        return OrganizationImportResultDto(created, updated, skipped, errors, details.take(40))
+    }
+
+    private fun requireInstitutionOrgManage() {
+        val me = UserContext.get()
+        if (me == null) return
+        val role = (me.activeRole ?: me.role).uppercase()
+        if (role in setOf("LECTURER", "VIEWER")) {
+            throw IllegalStateException("Not allowed to manage organization structure")
+        }
+    }
+
+    private fun normalizeOrgType(raw: String): String {
+        val t = raw.trim().ifBlank { "Department" }
+        val allowed = setOf(
+            "University", "College", "Faculty", "School", "Institute",
+            "Department", "Division", "Section", "Centre", "Center", "Program", "Programme"
+        )
+        return allowed.firstOrNull { it.equals(t, true) } ?: t.replaceFirstChar { it.uppercase() }
+    }
+
+    private fun wouldCreateCycle(tenantId: UUID, nodeId: UUID, newParentId: UUID): Boolean {
+        val byId = orgRepo.findByTenantIdOrderByNameAsc(tenantId).associateBy { it.id }
+        var walk: UUID? = newParentId
+        var guard = 0
+        while (walk != null && guard++ < 64) {
+            if (walk == nodeId) return true
+            walk = byId[walk]?.parentId
+        }
+        return false
+    }
+
+    private fun splitCsvLine(line: String): List<String> {
+        val out = mutableListOf<String>()
+        val cur = StringBuilder()
+        var inQuotes = false
+        var i = 0
+        while (i < line.length) {
+            val c = line[i]
+            when {
+                c == '"' -> {
+                    if (inQuotes && i + 1 < line.length && line[i + 1] == '"') {
+                        cur.append('"')
+                        i++
+                    } else {
+                        inQuotes = !inQuotes
+                    }
+                }
+                (c == ',' || c == ';' || c == '\t') && !inQuotes -> {
+                    out += cur.toString()
+                    cur.clear()
+                }
+                else -> cur.append(c)
+            }
+            i++
+        }
+        out += cur.toString()
+        return out
     }
 
     fun listLecturers(): List<LecturerDto> {
@@ -689,6 +968,7 @@ class AcademicFlowService(
     fun findCandidates(requestId: UUID) = matchingService.findCandidates(requestId)
 
     fun listAllocations(): List<AllocationDto> {
+        permissionService.require(com.academicflow.service.permission.PermissionCodes.ALLOCATIONS_VIEW)
         val tenantId = TenantContext.get()
         val units = unitRepo.findByTenantIdOrderByCodeAsc(tenantId).associateBy { it.id }
         val lecturers = lecturerRepo.findByTenantIdOrderByFullNameAsc(tenantId).associateBy { it.id }
@@ -713,13 +993,15 @@ class AcademicFlowService(
                 matchScore = a.matchScore,
                 status = a.status,
                 overrideReason = a.overrideReason,
-                teachingRequestId = a.teachingRequestId
+                teachingRequestId = a.teachingRequestId,
+                workflowStatus = a.workflowStatus
             )
         }
     }
 
     @Transactional
     fun createAllocation(req: CreateAllocationRequest): AllocationDto {
+        permissionService.require(com.academicflow.service.permission.PermissionCodes.ALLOCATIONS_CREATE)
         val tenantId = TenantContext.get()
         if (req.recommendedLecturerId != null && req.recommendedLecturerId != req.lecturerId && req.overrideReason.isNullOrBlank()) {
             throw IllegalArgumentException("Override reason required when selecting a lecturer other than the recommendation")
@@ -791,7 +1073,12 @@ class AcademicFlowService(
                     ?: if (req.recommendedLecturerId != null && req.recommendedLecturerId != req.lecturerId) "OVERRIDE"
                     else if (req.recommendedLecturerId == req.lecturerId) "ACCEPTED_RECOMMENDATION"
                     else null,
-                decisionNote = req.decisionNote
+                decisionNote = req.decisionNote,
+                createdBy = UserContext.get()?.userId,
+                workflowStatus = if (status == "CONFLICT")
+                    com.academicflow.service.permission.AllocationWorkflow.CHANGES_REQUESTED
+                else
+                    com.academicflow.service.permission.AllocationWorkflow.DRAFT
             )
         )
 
@@ -878,15 +1165,21 @@ class AcademicFlowService(
 
     @Transactional
     fun submitForApproval(allocationId: UUID): ApprovalDto {
+        permissionService.require(com.academicflow.service.permission.PermissionCodes.ALLOCATIONS_EDIT)
         val tenantId = TenantContext.get()
         val allocation = allocationRepo.findByTenantIdAndId(tenantId, allocationId)
             ?: throw NoSuchElementException("Allocation not found")
+        requireDepartmentForAllocation(allocation)
+        if (!com.academicflow.service.permission.AllocationWorkflow.canSubmit(allocation.workflowStatus)) {
+            throw IllegalStateException("Allocation cannot be submitted from workflow state ${allocation.workflowStatus}")
+        }
         val openHigh = conflictRepo.findByTenantIdAndResolvedFalseOrderByCreatedAtDesc(tenantId)
             .any { it.allocationId == allocationId && it.severity == "high" }
         if (allocation.status == "CONFLICT" && openHigh) {
             throw IllegalStateException("Resolve high-severity conflicts before submitting for approval")
         }
         allocation.status = "AWAITING_APPROVAL"
+        allocation.workflowStatus = com.academicflow.service.permission.AllocationWorkflow.SUBMITTED
         allocation.updatedAt = Instant.now()
         allocationRepo.save(allocation)
 
@@ -898,15 +1191,25 @@ class AcademicFlowService(
         val approval = approvalRepo.save(
             Approval(tenantId = tenantId, allocationId = allocationId, status = "PENDING")
         )
-        audit("Allocation submitted for approval", "Allocation", allocationId.toString(), null)
+        audit("Allocation submitted for approval", "Allocation", allocationId.toString(), "workflow=SUBMITTED")
         return listApprovals().first { it.id == approval.id }
     }
 
     @Transactional
     fun approveAllocation(allocationId: UUID, approve: Boolean, note: String?): AllocationDto {
+        if (approve) permissionService.require(com.academicflow.service.permission.PermissionCodes.ALLOCATIONS_APPROVE)
+        else permissionService.require(com.academicflow.service.permission.PermissionCodes.ALLOCATIONS_REJECT)
         val tenantId = TenantContext.get()
         val allocation = allocationRepo.findByTenantIdAndId(tenantId, allocationId)
             ?: throw NoSuchElementException("Allocation not found")
+        requireDepartmentForAllocation(allocation)
+        val wf = allocation.workflowStatus
+        if (approve && !com.academicflow.service.permission.AllocationWorkflow.canApprove(wf)) {
+            throw IllegalStateException("Cannot approve from workflow state $wf")
+        }
+        if (!approve && !com.academicflow.service.permission.AllocationWorkflow.canReject(wf)) {
+            throw IllegalStateException("Cannot reject from workflow state $wf")
+        }
         val approvals = approvalRepo.findByTenantIdAndAllocationId(tenantId, allocationId)
         val approval = approvals.maxByOrNull { it.submittedAt }
             ?: throw NoSuchElementException("No approval record")
@@ -915,8 +1218,10 @@ class AcademicFlowService(
             approval.status = "APPROVED"
             approval.decidedAt = Instant.now()
             approval.decisionNote = note
+            approval.decidedBy = UserContext.get()?.userId
             approvalRepo.save(approval)
             allocation.status = "APPROVED"
+            allocation.workflowStatus = com.academicflow.service.permission.AllocationWorkflow.APPROVED
             allocationRepo.save(allocation)
             // Publish immediately after approval for demo simplicity of the workflow
             allocation.status = "PUBLISHED"
@@ -938,12 +1243,93 @@ class AcademicFlowService(
             approval.status = "REJECTED"
             approval.decidedAt = Instant.now()
             approval.decisionNote = note
+            approval.decidedBy = UserContext.get()?.userId
             approvalRepo.save(approval)
             allocation.status = "CANCELLED"
+            allocation.workflowStatus = com.academicflow.service.permission.AllocationWorkflow.REJECTED
+            allocation.updatedAt = Instant.now()
             allocationRepo.save(allocation)
             audit("Allocation rejected", "Allocation", allocationId.toString(), note)
         }
         return listAllocations().first { it.id == allocationId }
+    }
+
+    private fun requireDepartmentForAllocation(allocation: Allocation) {
+        val unit = unitRepo.findByTenantIdAndId(allocation.tenantId, allocation.academicUnitId)
+            ?: throw NoSuchElementException("Academic unit not found")
+        scopeService.requireDepartmentAccess(unit.sourceDepartmentId)
+    }
+
+    fun listAllocationComments(allocationId: UUID): List<AllocationCommentDto> {
+        permissionService.require(com.academicflow.service.permission.PermissionCodes.ALLOCATIONS_VIEW)
+        val tenantId = TenantContext.get()
+        val allocation = allocationRepo.findByTenantIdAndId(tenantId, allocationId)
+            ?: throw NoSuchElementException("Allocation not found")
+        requireDepartmentForAllocation(allocation)
+        val users = userRepo.findByTenantIdOrderByFullNameAsc(tenantId).associateBy { it.id }
+        return allocationCommentRepo.findByTenantIdAndAllocationIdOrderByCreatedAtAsc(tenantId, allocationId).map {
+            AllocationCommentDto(
+                id = it.id,
+                allocationId = it.allocationId,
+                authorId = it.authorId,
+                authorName = users[it.authorId]?.fullName ?: "User",
+                body = it.body,
+                commentType = it.commentType,
+                createdAt = it.createdAt,
+                updatedAt = it.updatedAt,
+                resolvedAt = it.resolvedAt
+            )
+        }
+    }
+
+    @Transactional
+    fun addAllocationComment(allocationId: UUID, body: String, commentType: String = "COMMENT"): AllocationCommentDto {
+        val type = commentType.trim().uppercase().ifBlank { "COMMENT" }
+        when (type) {
+            "COMMENT" -> permissionService.require(com.academicflow.service.permission.PermissionCodes.ALLOCATIONS_COMMENT)
+            "REVIEW" -> permissionService.require(com.academicflow.service.permission.PermissionCodes.ALLOCATIONS_REVIEW)
+            "CHANGES_REQUESTED" -> permissionService.require(com.academicflow.service.permission.PermissionCodes.ALLOCATIONS_REVIEW)
+            else -> permissionService.require(com.academicflow.service.permission.PermissionCodes.ALLOCATIONS_COMMENT)
+        }
+        val tenantId = TenantContext.get()
+        val me = UserContext.require()
+        val allocation = allocationRepo.findByTenantIdAndId(tenantId, allocationId)
+            ?: throw NoSuchElementException("Allocation not found")
+        requireDepartmentForAllocation(allocation)
+        val wf = allocation.workflowStatus
+        when (type) {
+            "COMMENT" -> if (!com.academicflow.service.permission.AllocationWorkflow.canComment(wf)) {
+                throw IllegalStateException("Cannot comment in workflow state $wf")
+            }
+            "REVIEW" -> if (!com.academicflow.service.permission.AllocationWorkflow.canReview(wf)) {
+                throw IllegalStateException("Cannot review in workflow state $wf")
+            }
+            "CHANGES_REQUESTED" -> if (!com.academicflow.service.permission.AllocationWorkflow.canRequestChanges(wf)) {
+                throw IllegalStateException("Cannot request changes in workflow state $wf")
+            }
+        }
+        val saved = allocationCommentRepo.save(
+            AllocationComment(
+                tenantId = tenantId,
+                allocationId = allocationId,
+                authorId = me.userId,
+                body = body.trim(),
+                commentType = type
+            )
+        )
+        if (type == "REVIEW" && wf == com.academicflow.service.permission.AllocationWorkflow.SUBMITTED) {
+            allocation.workflowStatus = com.academicflow.service.permission.AllocationWorkflow.UNDER_REVIEW
+            allocation.updatedAt = Instant.now()
+            allocationRepo.save(allocation)
+        }
+        if (type == "CHANGES_REQUESTED") {
+            allocation.workflowStatus = com.academicflow.service.permission.AllocationWorkflow.CHANGES_REQUESTED
+            allocation.status = "CONFLICT"
+            allocation.updatedAt = Instant.now()
+            allocationRepo.save(allocation)
+        }
+        audit("Allocation $type", "Allocation", allocationId.toString(), body.take(200))
+        return listAllocationComments(allocationId).first { it.id == saved.id }
     }
 
     private fun ensureTimetableSlot(allocation: Allocation) {

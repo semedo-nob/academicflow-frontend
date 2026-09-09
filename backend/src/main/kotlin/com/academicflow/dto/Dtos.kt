@@ -192,7 +192,25 @@ data class AllocationDto(
     val matchScore: BigDecimal?,
     val status: String,
     val overrideReason: String?,
-    val teachingRequestId: UUID?
+    val teachingRequestId: UUID?,
+    val workflowStatus: String = "DRAFT"
+)
+
+data class AllocationCommentDto(
+    val id: UUID,
+    val allocationId: UUID,
+    val authorId: UUID,
+    val authorName: String,
+    val body: String,
+    val commentType: String,
+    val createdAt: Instant,
+    val updatedAt: Instant,
+    val resolvedAt: Instant?
+)
+
+data class CreateAllocationCommentRequest(
+    val body: String,
+    val commentType: String = "COMMENT"
 )
 
 data class ApprovalDto(
@@ -243,6 +261,23 @@ data class CreateOrgNodeRequest(
     val type: String,
     val parentId: UUID? = null,
     val parentName: String? = null
+)
+
+data class UpdateOrgNodeRequest(
+    val name: String? = null,
+    val type: String? = null,
+    val parentId: UUID? = null,
+    val parentName: String? = null,
+    /** When true and both parent fields are null/blank, clear parent (make root). */
+    val clearParent: Boolean = false
+)
+
+data class OrganizationImportResultDto(
+    val created: Int,
+    val updated: Int,
+    val skipped: Int,
+    val errors: Int,
+    val details: List<String> = emptyList()
 )
 
 data class UserDto(
@@ -511,11 +546,21 @@ data class InvitationDto(
     val name: String,
     val role: String,
     val organizationNodeId: UUID?,
+    val organizationName: String? = null,
     val status: String,
-    val token: String,
-    val invitePath: String,
+    /** Present only on create / resend / rotate-link responses — never echo stored secrets from list. */
+    val token: String? = null,
+    val invitePath: String? = null,
     val createdAt: String,
-    val expiresAt: String
+    val expiresAt: String,
+    val deliveryStatus: String? = null,
+    val deliveryError: String? = null,
+    val emailProvider: String? = null,
+    val lastSentAt: String? = null,
+    val emailSent: Boolean? = null,
+    val message: String? = null,
+    val permissions: List<String> = emptyList(),
+    val permissionTemplate: String? = null
 )
 
 data class CreateInvitationRequest(
@@ -523,7 +568,9 @@ data class CreateInvitationRequest(
     val name: String,
     val role: String,
     val organizationNodeId: UUID? = null,
-    val organization: String? = null
+    val organization: String? = null,
+    val permissionTemplate: String? = null,
+    val permissions: List<String>? = null
 )
 
 data class AcceptInvitationRequest(

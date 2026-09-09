@@ -7,11 +7,10 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { CURRENT_USER } from '../data/mockData';
 import type { Membership, User } from '../types';
 import { adminService, authService } from '../services';
 import { normalizeRole } from '../lib/access';
-import { setActiveDepartmentId } from '../services/api';
+import { clearClientSession, setActiveDepartmentId, setTenantId } from '../services/api';
 
 interface PeriodState {
   academicYearLabel: string;
@@ -24,7 +23,25 @@ interface PeriodState {
 
 interface AppContextValue {
   authenticated: boolean;
+  /** Changes on login, logout, and department switch — drives data isolation refetches. */
+  sessionKey: string;
+  authLoading: boolean;
+  clerkEnabled: boolean;
   login: (email?: string, password?: string) => Promise<void>;
+  establishClerkSession: () => Promise<void>;
+  applySessionPayload: (res: {
+    email: string;
+    name: string;
+    role: string;
+    tenantId: string;
+    userId?: string;
+    organizationNodeId?: string | null;
+    departmentName?: string | null;
+    activeDepartmentId?: string | null;
+    activeDepartmentName?: string | null;
+    activeRole?: string | null;
+    memberships?: Membership[];
+  }) => void;
   logout: () => void;
   user: User;
   setActiveDepartment: (departmentId: string) => void;
@@ -52,6 +69,16 @@ const defaultPeriod: PeriodState = {
   selectedSemesterId: null,
 };
 
+const EMPTY_USER: User = {
+  id: '',
+  name: '',
+  email: '',
+  role: 'VIEWER',
+  initials: '',
+  departmentName: '',
+  memberships: [],
+};
+
 function loadUser(): User {
   try {
     const raw = localStorage.getItem('af_user');
@@ -68,8 +95,10 @@ function loadUser(): User {
         activeDepartmentName?: string;
         activeRole?: string;
         memberships?: Membership[];
+        tenantId?: string;
       };
-      const parts = parsed.name.replace(/^(Dr\.|Prof\.|Mr\.|Ms\.)\s*/, '').split(' ');
+      if (!parsed.email) return EMPTY_USER;
+      const parts = (parsed.name || '').replace(/^(Dr\.|Prof\.|Mr\.|Ms\.)\s*/, '').split(' ');
       return {
         id: parsed.userId || parsed.id || 'u-local',
         name: parsed.name,
@@ -87,10 +116,10 @@ function loadUser(): User {
   } catch {
     /* ignore */
   }
-  return CURRENT_USER;
+  return EMPTY_USER;
 }
 
-function persistUser(user: User) {
+function persistUser(user: User, tenantId?: string) {
   localStorage.setItem(
     'af_user',
     JSON.stringify({
@@ -105,21 +134,39 @@ function persistUser(user: User) {
       activeDepartmentName: user.activeDepartmentName,
       activeRole: user.activeRole,
       memberships: user.memberships || [],
+      tenantId: tenantId || localStorage.getItem('af_tenant') || undefined,
     }),
   );
   if (user.activeDepartmentId) setActiveDepartmentId(user.activeDepartmentId);
   else setActiveDepartmentId(null);
 }
 
+function buildSessionKey(user: User, epoch: number): string {
+  const tenant = localStorage.getItem('af_tenant') || 'none';
+  return [tenant, user.id || 'anon', user.email || '', user.activeDepartmentId || '', String(epoch)].join('|');
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [authenticated, setAuthenticated] = useState(
-    () => localStorage.getItem('af_auth') === '1',
+    () => localStorage.getItem('af_auth') === '1' && !!loadUser().email,
   );
-  const [user, setUser] = useState<User>(loadUser);
+  const [user, setUser] = useState<User>(() => (localStorage.getItem('af_auth') === '1' ? loadUser() : EMPTY_USER));
+  const [authLoading, setAuthLoading] = useState(true);
+  const [clerkEnabled, setClerkEnabled] = useState(false);
+  const [sessionEpoch, setSessionEpoch] = useState(0);
   const [drawer, setDrawer] = useState<ReactNode | null>(null);
   const [selectedRequestId, setSelectedRequestId] = useState('');
   const [selectedOfferingId, setSelectedOfferingId] = useState('');
   const [period, setPeriod] = useState<PeriodState>(defaultPeriod);
+
+  const sessionKey = useMemo(() => buildSessionKey(user, sessionEpoch), [user, sessionEpoch]);
+
+  const resetWorkspace = useCallback(() => {
+    setDrawer(null);
+    setSelectedRequestId('');
+    setSelectedOfferingId('');
+    setPeriod(defaultPeriod);
+  }, []);
 
   const refreshPeriod = useCallback(async () => {
     try {
@@ -139,7 +186,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (authenticated) void refreshPeriod();
-  }, [authenticated, refreshPeriod]);
+  }, [authenticated, sessionKey, refreshPeriod]);
 
   const setAcademicYearId = useCallback(
     (id: string) => {
@@ -173,32 +220,86 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const login = useCallback(async (email = 'j.wanjiku@uonbi.ac.ke', password = 'local') => {
-    const res = await authService.login(email, password);
-    const parts = res.name.replace(/^(Dr\.|Prof\.|Mr\.|Ms\.)\s*/, '').split(' ');
-    const role = normalizeRole(res.role);
-    const memberships = (res.memberships || []) as Membership[];
-    const next: User = {
-      id: res.userId || 'u-local',
-      name: res.name,
-      email: res.email,
-      role,
-      initials: ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase(),
-      departmentName:
-        res.activeDepartmentName ||
-        res.departmentName ||
-        (role === 'SUPER_ADMIN' ? 'Platform' : role === 'INSTITUTION_ADMIN' ? 'Institution' : 'Department'),
-      organizationNodeId: res.organizationNodeId || undefined,
-      activeDepartmentId: res.activeDepartmentId || res.organizationNodeId || undefined,
-      activeDepartmentName: res.activeDepartmentName || res.departmentName || undefined,
-      activeRole: res.activeRole || res.role,
-      memberships,
+  const applySessionPayload = useCallback(
+    (res: {
+      email: string;
+      name: string;
+      role: string;
+      tenantId: string;
+      userId?: string;
+      organizationNodeId?: string | null;
+      departmentName?: string | null;
+      activeDepartmentId?: string | null;
+      activeDepartmentName?: string | null;
+      activeRole?: string | null;
+      memberships?: Membership[];
+    }) => {
+      const parts = res.name.replace(/^(Dr\.|Prof\.|Mr\.|Ms\.)\s*/, '').split(' ');
+      const role = normalizeRole(res.role);
+      const memberships = (res.memberships || []) as Membership[];
+      const next: User = {
+        id: res.userId || 'u-local',
+        name: res.name,
+        email: res.email,
+        role,
+        initials: ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase(),
+        departmentName:
+          res.activeDepartmentName ||
+          res.departmentName ||
+          (role === 'SUPER_ADMIN' ? 'Platform' : role === 'INSTITUTION_ADMIN' ? 'Institution' : 'Department'),
+        organizationNodeId: res.organizationNodeId || undefined,
+        activeDepartmentId: res.activeDepartmentId || res.organizationNodeId || undefined,
+        activeDepartmentName: res.activeDepartmentName || res.departmentName || undefined,
+        activeRole: res.activeRole || res.role,
+        memberships,
+      };
+      setTenantId(res.tenantId);
+      persistUser(next, res.tenantId);
+      localStorage.setItem('af_auth', '1');
+      setUser(next);
+      setSessionEpoch((e) => e + 1);
+      setAuthenticated(true);
+      window.dispatchEvent(new CustomEvent('af-session-changed', { detail: { email: next.email } }));
+    },
+    [],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void authService
+      .authMode()
+      .then((m) => {
+        if (!cancelled) setClerkEnabled(!!m.clerkEnabled);
+      })
+      .catch(() => {
+        if (!cancelled) setClerkEnabled(false);
+      })
+      .finally(() => {
+        if (!cancelled) setAuthLoading(false);
+      });
+    return () => {
+      cancelled = true;
     };
-    setUser(next);
-    persistUser(next);
-    localStorage.setItem('af_auth', '1');
-    setAuthenticated(true);
   }, []);
+
+  const login = useCallback(
+    async (email = 'j.wanjiku@uonbi.ac.ke', password = 'local') => {
+      // Wipe prior identity so no request can still use the old email/dept/tenant
+      clearClientSession({ keepRemember: true });
+      resetWorkspace();
+      setUser(EMPTY_USER);
+      setAuthenticated(false);
+
+      const res = await authService.login(email, password);
+      applySessionPayload(res);
+    },
+    [resetWorkspace, applySessionPayload],
+  );
+
+  const establishClerkSession = useCallback(async () => {
+    const res = await authService.establishClerkSession();
+    applySessionPayload(res);
+  }, [applySessionPayload]);
 
   const setActiveDepartment = useCallback((departmentId: string) => {
     setUser((prev) => {
@@ -213,15 +314,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
       persistUser(next);
       return next;
     });
+    setSelectedRequestId('');
+    setSelectedOfferingId('');
+    setDrawer(null);
+    setSessionEpoch((e) => e + 1);
     window.dispatchEvent(new CustomEvent('af-department-changed', { detail: departmentId }));
+    window.dispatchEvent(new CustomEvent('af-session-changed', { detail: { departmentId } }));
   }, []);
 
   const logout = useCallback(() => {
-    localStorage.removeItem('af_auth');
-    localStorage.removeItem('af_user');
-    setActiveDepartmentId(null);
+    clearClientSession({ keepRemember: true });
+    resetWorkspace();
+    setUser(EMPTY_USER);
     setAuthenticated(false);
-  }, []);
+    setSessionEpoch((e) => e + 1);
+    window.dispatchEvent(new CustomEvent('af-session-changed', { detail: { email: null } }));
+  }, [resetWorkspace]);
 
   const openDrawer = useCallback((node: ReactNode) => setDrawer(node), []);
   const closeDrawer = useCallback(() => setDrawer(null), []);
@@ -235,7 +343,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       authenticated,
+      sessionKey,
+      authLoading,
+      clerkEnabled,
       login,
+      establishClerkSession,
+      applySessionPayload,
       logout,
       user,
       setActiveDepartment,
@@ -253,7 +366,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }),
     [
       authenticated,
+      sessionKey,
+      authLoading,
+      clerkEnabled,
       login,
+      establishClerkSession,
+      applySessionPayload,
       logout,
       user,
       setActiveDepartment,

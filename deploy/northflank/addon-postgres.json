@@ -1,0 +1,13 @@
+{
+  "name": "academicflow-db",
+  "description": "AcademicFlow PostgreSQL 16",
+  "type": "postgresql",
+  "version": "16-latest",
+  "billing": {
+    "deploymentPlan": "nf-compute-50",
+    "storage": 5120,
+    "replicas": 1
+  },
+  "tlsEnabled": true,
+  "externalAccessEnabled": false
+}

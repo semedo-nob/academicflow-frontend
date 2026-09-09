@@ -46,7 +46,7 @@ Frontend route gates are **not** the security boundary. The API enforces tenant 
 - Public **institution registration** → pending until Super Admin approval  
 - Guided **post-approval onboarding**: create departments → invite one chair each  
 - Organization hierarchy (university / school / department)  
-- Invitations (copy link) and **assign department chair** (one active chair per department)
+- Invitations (email via Resend/Postal/console + copy link) and **assign department chair** (one active chair per department); accept via Clerk when configured
 
 ### Cross-department teaching
 - Teaching requests with preferred source department  

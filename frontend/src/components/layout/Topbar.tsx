@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useClerk } from '@clerk/react';
 import { useApp } from '../../context/AppContext';
+import { clerkConfigured } from '../../lib/clerk';
 import { defaultNavigationSuggestions, searchNavigation } from '../../lib/navSearch';
 import { auditService, conflictService, searchService } from '../../services';
 import { IconBell, IconSearch } from '../ui/Icons';
@@ -98,7 +100,7 @@ function NotificationsDrawer({ onClose }: { onClose: () => void }) {
 export function Topbar() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
-  const { user, period, setAcademicYearId, setSemesterId, openDrawer, closeDrawer, logout, setActiveDepartment } =
+  const { user, period, setAcademicYearId, setSemesterId, openDrawer, closeDrawer, setActiveDepartment } =
     useApp();
   const crumb = BREADCRUMBS[pathname] || 'AcademicFlow';
   const [searchOpen, setSearchOpen] = useState(false);
@@ -323,18 +325,7 @@ export function Topbar() {
                 >
                   Profile
                 </button>
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  style={{ width: '100%', marginTop: 8 }}
-                  onClick={() => {
-                    setMenuOpen(false);
-                    logout();
-                    navigate('/login');
-                  }}
-                >
-                  Sign out
-                </button>
+                <SignOutMenuButton onClose={() => setMenuOpen(false)} />
               </div>
             )}
           </div>
@@ -394,5 +385,49 @@ export function Topbar() {
         </div>
       )}
     </>
+  );
+}
+
+function SignOutMenuButton({ onClose }: { onClose: () => void }) {
+  if (clerkConfigured) return <ClerkSignOutMenuButton onClose={onClose} />;
+  return <LegacySignOutMenuButton onClose={onClose} />;
+}
+
+function LegacySignOutMenuButton({ onClose }: { onClose: () => void }) {
+  const { logout } = useApp();
+  const navigate = useNavigate();
+  return (
+    <button
+      type="button"
+      className="btn btn-sm"
+      style={{ width: '100%', marginTop: 8 }}
+      onClick={() => {
+        onClose();
+        logout();
+        navigate('/login');
+      }}
+    >
+      Sign out
+    </button>
+  );
+}
+
+function ClerkSignOutMenuButton({ onClose }: { onClose: () => void }) {
+  const { signOut } = useClerk();
+  const { logout } = useApp();
+  const navigate = useNavigate();
+  return (
+    <button
+      type="button"
+      className="btn btn-sm"
+      style={{ width: '100%', marginTop: 8 }}
+      onClick={() => {
+        onClose();
+        logout();
+        void signOut({ redirectUrl: '/login' }).catch(() => navigate('/login'));
+      }}
+    >
+      Sign out
+    </button>
   );
 }

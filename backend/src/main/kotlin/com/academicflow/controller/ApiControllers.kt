@@ -22,17 +22,42 @@ class ApiControllers(
     private val admin: AdminConfigService,
     private val fileImportService: FileImportService,
     private val exportService: ExportService,
-    private val courseOfferingService: CourseOfferingService
+    private val courseOfferingService: CourseOfferingService,
+    private val authIdentityService: com.academicflow.service.auth.AuthIdentityService,
+    private val permissionService: com.academicflow.service.permission.PermissionService
 ) {
 
     @PostMapping("/auth/login")
     fun login(@RequestBody req: LoginRequest) = try {
+        if (authIdentityService.clerkEnabled() && !authIdentityService.legacyEnabled()) {
+            throw ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Password login is disabled. Sign in with Clerk."
+            )
+        }
         service.login(req)
     } catch (e: NoSuchElementException) {
         throw ResponseStatusException(HttpStatus.UNAUTHORIZED, e.message)
     } catch (e: IllegalStateException) {
         throw ResponseStatusException(HttpStatus.FORBIDDEN, e.message)
     }
+
+    @PostMapping("/auth/session")
+    fun establishClerkSession() = try {
+        val identity = com.academicflow.config.ClerkContext.get()
+            ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Clerk session required")
+        authIdentityService.establishSessionFromClerk(identity)
+    } catch (e: IllegalStateException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    } catch (e: IllegalArgumentException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    }
+
+    @GetMapping("/auth/mode")
+    fun authMode() = mapOf(
+        "clerkEnabled" to authIdentityService.clerkEnabled(),
+        "legacyEnabled" to authIdentityService.legacyEnabled()
+    )
 
     @PostMapping("/auth/register-institution")
     fun registerInstitution(@RequestBody req: CreateInstitutionRequest) = try {
@@ -76,7 +101,56 @@ class ApiControllers(
     fun organization() = service.organizationTree()
 
     @PostMapping("/organization")
-    fun createOrg(@RequestBody req: CreateOrgNodeRequest) = service.createOrgNode(req)
+    fun createOrg(@RequestBody req: CreateOrgNodeRequest) = try {
+        service.createOrgNode(req)
+    } catch (e: IllegalArgumentException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    } catch (e: IllegalStateException) {
+        throw ResponseStatusException(HttpStatus.FORBIDDEN, e.message)
+    }
+
+    @PutMapping("/organization/{id}")
+    fun updateOrg(@PathVariable id: UUID, @RequestBody req: UpdateOrgNodeRequest) = try {
+        service.updateOrgNode(id, req)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    } catch (e: IllegalArgumentException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    } catch (e: IllegalStateException) {
+        throw ResponseStatusException(HttpStatus.FORBIDDEN, e.message)
+    }
+
+    @DeleteMapping("/organization/{id}")
+    fun deleteOrg(
+        @PathVariable id: UUID,
+        @RequestParam(defaultValue = "false") cascade: Boolean
+    ) = try {
+        service.deleteOrgNode(id, cascade)
+        mapOf("ok" to true, "id" to id, "cascade" to cascade)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    } catch (e: IllegalArgumentException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    } catch (e: IllegalStateException) {
+        throw ResponseStatusException(HttpStatus.FORBIDDEN, e.message)
+    }
+
+    @PostMapping("/organization/import", consumes = [MediaType.MULTIPART_FORM_DATA_VALUE, MediaType.TEXT_PLAIN_VALUE, MediaType.APPLICATION_OCTET_STREAM_VALUE])
+    fun importOrganization(
+        @RequestParam(value = "file", required = false) file: MultipartFile?,
+        @RequestBody(required = false) body: String?
+    ) = try {
+        val text = when {
+            file != null && !file.isEmpty -> file.bytes.toString(Charsets.UTF_8)
+            !body.isNullOrBlank() -> body
+            else -> throw IllegalArgumentException("Provide a CSV file (multipart field 'file') or plain-text body")
+        }
+        service.importOrganizationNodes(text)
+    } catch (e: IllegalArgumentException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    } catch (e: IllegalStateException) {
+        throw ResponseStatusException(HttpStatus.FORBIDDEN, e.message)
+    }
 
     @GetMapping("/lecturers")
     fun lecturers() = service.listLecturers()
@@ -179,10 +253,49 @@ class ApiControllers(
         @PathVariable id: UUID,
         @RequestParam(defaultValue = "true") approve: Boolean,
         @RequestParam(required = false) note: String?
-    ) = service.approveAllocation(id, approve, note)
+    ) = try {
+        service.approveAllocation(id, approve, note)
+    } catch (e: IllegalStateException) {
+        throw ResponseStatusException(HttpStatus.CONFLICT, e.message)
+    }
+
+    @GetMapping("/allocations/{id}/comments")
+    fun allocationComments(@PathVariable id: UUID) = try {
+        service.listAllocationComments(id)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    }
+
+    @PostMapping("/allocations/{id}/comments")
+    fun addAllocationComment(@PathVariable id: UUID, @RequestBody req: CreateAllocationCommentRequest) = try {
+        service.addAllocationComment(id, req.body, req.commentType)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    } catch (e: IllegalStateException) {
+        throw ResponseStatusException(HttpStatus.CONFLICT, e.message)
+    } catch (e: IllegalArgumentException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    }
 
     @GetMapping("/approvals")
     fun approvals() = service.listApprovals()
+
+    @GetMapping("/me/permissions")
+    fun myPermissions() =
+        mapOf(
+            "permissions" to permissionService.effectiveForCurrentUser().sorted(),
+            "catalog" to com.academicflow.service.permission.PermissionCodes.ALL.sorted(),
+            "templates" to com.academicflow.service.permission.PermissionCodes.TEMPLATES.mapValues { it.value.sorted() }
+        )
+
+    @GetMapping("/permissions/catalog")
+    fun permissionCatalog() = mapOf(
+        "permissions" to com.academicflow.service.permission.PermissionCodes.ALL.sorted(),
+        "templates" to com.academicflow.service.permission.PermissionCodes.TEMPLATES.mapValues { it.value.sorted() },
+        "roleDefaults" to listOf(
+            "SUPER_ADMIN", "INSTITUTION_ADMIN", "DEPARTMENT_CHAIR", "LECTURER", "STUDENT", "STAFF", "VIEWER"
+        ).associateWith { com.academicflow.service.permission.PermissionCodes.defaultsForRole(it).sorted() }
+    )
 
     @GetMapping("/conflicts")
     fun conflicts() = service.listConflicts()
@@ -427,6 +540,33 @@ class AdminControllers(private val admin: AdminConfigService, private val servic
     fun createInvitation(@RequestBody req: CreateInvitationRequest) = try {
         admin.createInvitation(req)
     } catch (e: IllegalArgumentException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    }
+
+    @PostMapping("/invitations/{id}/resend")
+    fun resendInvitation(@PathVariable id: UUID) = try {
+        admin.resendInvitation(id)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    } catch (e: IllegalStateException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    }
+
+    @PostMapping("/invitations/{id}/rotate-link")
+    fun rotateInvitationLink(@PathVariable id: UUID) = try {
+        admin.rotateInvitationLink(id)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    } catch (e: IllegalStateException) {
+        throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+    }
+
+    @PostMapping("/invitations/{id}/revoke")
+    fun revokeInvitation(@PathVariable id: UUID) = try {
+        admin.revokeInvitation(id)
+    } catch (e: NoSuchElementException) {
+        throw ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
+    } catch (e: IllegalStateException) {
         throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
     }
 

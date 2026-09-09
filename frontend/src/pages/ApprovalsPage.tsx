@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { APPROVALS } from '../data/mockData';
 import { approvalService, allocationService, exportService } from '../services';
 import { useAsyncData } from '../hooks/useAsyncData';
 import { useFeedback } from '../context/FeedbackContext';
@@ -12,7 +11,7 @@ export function ApprovalsPage() {
   const [tab, setTab] = useState(0);
   const [tick, setTick] = useState(0);
   const [exporting, setExporting] = useState<string | null>(null);
-  const { data: approvals, fromApi } = useAsyncData(() => approvalService.list(), APPROVALS as never, [tick]);
+  const { data: approvals, fromApi } = useAsyncData(() => approvalService.list(), [], [tick]);
   const pending = approvals.filter((a) => a.status === 'Pending Approval').length;
   const approved = approvals.filter((a) => a.status === 'Approved').length;
   const rejected = approvals.filter((a) => a.status === 'Rejected' || a.status === 'REJECTED').length;

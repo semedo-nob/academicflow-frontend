@@ -23,7 +23,10 @@ class ScopeIsolationTest {
     )
 
     @AfterEach
-    fun clear() = UserContext.clear()
+    fun clear() {
+        UserContext.clear()
+        Mockito.framework().clearInlineMocks()
+    }
 
     private fun chairPrincipal(active: UUID = cs) = UserContext.Principal(
         userId = chairUser,

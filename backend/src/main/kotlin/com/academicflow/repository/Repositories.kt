@@ -9,6 +9,7 @@ import java.util.UUID
 
 interface OrganizationNodeRepository : JpaRepository<OrganizationNode, UUID> {
     fun findByTenantIdOrderByNameAsc(tenantId: UUID): List<OrganizationNode>
+    fun findByTenantIdAndId(tenantId: UUID, id: UUID): OrganizationNode?
 }
 
 interface LecturerRepository : JpaRepository<Lecturer, UUID> {
@@ -79,6 +80,7 @@ interface AppUserRepository : JpaRepository<AppUser, UUID> {
     fun findByTenantIdAndEmail(tenantId: UUID, email: String): AppUser?
     fun findByTenantIdOrderByFullNameAsc(tenantId: UUID): List<AppUser>
     fun findByEmailIgnoreCase(email: String): List<AppUser>
+    fun findByClerkUserId(clerkUserId: String): AppUser?
 }
 
 interface OrganizationMembershipRepository : JpaRepository<OrganizationMembership, UUID> {
@@ -160,6 +162,8 @@ interface SecurityEventRepository : JpaRepository<SecurityEvent, UUID> {
 interface InvitationRepository : JpaRepository<Invitation, UUID> {
     fun findByTenantIdOrderByCreatedAtDesc(tenantId: UUID): List<Invitation>
     fun findByToken(token: String): Invitation?
+    fun findByTokenHash(tokenHash: String): Invitation?
+    fun findByTenantIdAndId(tenantId: UUID, id: UUID): Invitation?
     fun findByTenantIdAndEmailIgnoreCaseAndStatus(tenantId: UUID, email: String, status: String): List<Invitation>
 }
 
@@ -182,4 +186,12 @@ interface CourseRequirementRepository : JpaRepository<CourseRequirement, UUID> {
 interface LecturerContextExperienceRepository : JpaRepository<LecturerContextExperience, UUID> {
     fun findByTenantIdAndLecturerId(tenantId: UUID, lecturerId: UUID): List<LecturerContextExperience>
     fun findByTenantId(tenantId: UUID): List<LecturerContextExperience>
+}
+
+interface UserPermissionRepository : JpaRepository<UserPermission, UUID> {
+    fun findByTenantIdAndUserId(tenantId: UUID, userId: UUID): List<UserPermission>
+}
+
+interface AllocationCommentRepository : JpaRepository<AllocationComment, UUID> {
+    fun findByTenantIdAndAllocationIdOrderByCreatedAtAsc(tenantId: UUID, allocationId: UUID): List<AllocationComment>
 }

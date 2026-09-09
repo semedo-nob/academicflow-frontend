@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ADMIN_SECTIONS } from '../data/mockData';
 import { useApp } from '../context/AppContext';
 import { useFeedback } from '../context/FeedbackContext';
@@ -88,17 +89,62 @@ function RoleCell({
 }
 
 function UsersDrawer({ onClose }: { onClose: () => void }) {
+  const navigate = useNavigate();
   const { user } = useApp();
-  const { error: notifyError, success } = useFeedback();
+  const { error: notifyError, success, confirm } = useFeedback();
   const [tick, setTick] = useState(0);
   const { data: users, loading } = useAsyncData(() => userService.list(), [], [tick]);
   const { data: invitations } = useAsyncData(() => userService.invitations(), [], [tick]);
   const { data: roles } = useAsyncData(() => adminService.roles(), [], []);
   const { data: orgs } = useAsyncData(() => organizationService.list(), [], []);
-  const [form, setForm] = useState({ name: '', email: '', role: 'VIEWER', organization: '' });
+  const [form, setForm] = useState({
+    name: '',
+    email: '',
+    role: 'DEPARTMENT_CHAIR',
+    organization: '',
+    permissionTemplate: 'ROLE_DEFAULTS',
+    permissions: [] as string[],
+  });
   const [busy, setBusy] = useState(false);
   const [lastInvitePath, setLastInvitePath] = useState<string | null>(null);
   const [chairForm, setChairForm] = useState({ email: '', department: '' });
+
+  const INVITE_PERM_OPTIONS = [
+    { code: 'ALLOCATIONS.VIEW', label: 'View allocations' },
+    { code: 'ALLOCATIONS.CREATE', label: 'Create allocations' },
+    { code: 'ALLOCATIONS.EDIT', label: 'Edit allocations' },
+    { code: 'ALLOCATIONS.COMMENT', label: 'Comment' },
+    { code: 'ALLOCATIONS.REVIEW', label: 'Review' },
+    { code: 'ALLOCATIONS.APPROVE', label: 'Approve' },
+    { code: 'ALLOCATIONS.REJECT', label: 'Reject' },
+    { code: 'REPORTS.VIEW', label: 'View reports' },
+    { code: 'REPORTS.EXPORT', label: 'Export reports' },
+    { code: 'USERS.VIEW', label: 'View users' },
+    { code: 'DEPARTMENT.VIEW', label: 'View department' },
+  ];
+
+  const TEMPLATE_PERMS: Record<string, string[]> = {
+    ROLE_DEFAULTS: [],
+    LECTURER_DEFAULTS: [
+      'ALLOCATIONS.VIEW',
+      'ALLOCATIONS.EDIT_OWN',
+      'ALLOCATIONS.COMMENT',
+      'ALLOCATIONS.REVIEW',
+      'REPORTS.VIEW',
+      'DEPARTMENT.VIEW',
+    ],
+    REVIEWER: ['ALLOCATIONS.VIEW', 'ALLOCATIONS.COMMENT', 'ALLOCATIONS.REVIEW', 'DEPARTMENT.VIEW'],
+    COORDINATOR: [
+      'ALLOCATIONS.VIEW',
+      'ALLOCATIONS.CREATE',
+      'ALLOCATIONS.EDIT',
+      'ALLOCATIONS.COMMENT',
+      'ALLOCATIONS.REVIEW',
+      'REPORTS.VIEW',
+      'DEPARTMENT.VIEW',
+    ],
+    CUSTOM: [],
+  };
 
   const roleOptions = (roles.length ? roles : [{ code: 'VIEWER', name: 'Viewer' }]).filter(
     (r) => isSuperAdmin(user.role) || r.code !== 'SUPER_ADMIN',
@@ -139,11 +185,27 @@ function UsersDrawer({ onClose }: { onClose: () => void }) {
         email: form.email.trim(),
         role: form.role.trim() || 'VIEWER',
         organization: form.organization.trim() || null,
+        permissionTemplate: form.permissionTemplate,
+        permissions: form.permissionTemplate === 'CUSTOM' || form.permissions.length
+          ? form.permissions
+          : undefined,
       });
-      setForm({ name: '', email: '', role: 'VIEWER', organization: '' });
-      setLastInvitePath(res.invitePath);
+      setForm({
+        name: '',
+        email: '',
+        role: 'DEPARTMENT_CHAIR',
+        organization: '',
+        permissionTemplate: 'ROLE_DEFAULTS',
+        permissions: [],
+      });
+      setLastInvitePath(res.invitePath || null);
       setTick((t) => t + 1);
-      success(`Invitation created for ${res.email}`);
+      if (res.emailSent) success(res.message || `Invitation emailed to ${res.email}`);
+      else if (res.deliveryStatus === 'FAILED') {
+        notifyError(res.message || res.deliveryError || 'Invitation created, but email delivery failed');
+      } else {
+        success(res.message || `Invitation created for ${res.email}`);
+      }
     } catch (e) {
       notifyError(e instanceof Error ? e.message : 'Could not send invitation');
     } finally {
@@ -153,7 +215,25 @@ function UsersDrawer({ onClose }: { onClose: () => void }) {
 
   return (
     <DrawerShell title="Users & invitations" onClose={onClose}>
-      <p className="section-sub">Invite colleagues to this institution. They activate via the invite link.</p>
+      <div className="setup-banner" style={{ marginBottom: 16 }}>
+        <p>
+          After registration/approval, invite one <b>Department Chair</b> per department (copy the invite link). Or open
+          the guided wizard.
+        </p>
+        <Button
+          variant="primary"
+          onClick={() => {
+            onClose();
+            navigate('/onboarding');
+          }}
+        >
+          Institution setup
+        </Button>
+      </div>
+      <p className="section-sub">
+        Invite colleagues to this institution. AcademicFlow emails the secure link when a provider is configured; you can
+        always copy the link as a fallback.
+      </p>
       {loading && <p className="section-sub">Loading…</p>}
       <div className="table-wrap" style={{ border: 'none' }}>
         <table>
@@ -210,7 +290,8 @@ function UsersDrawer({ onClose }: { onClose: () => void }) {
                 <th>Name</th>
                 <th>Email</th>
                 <th>Role</th>
-                <th>Invite link</th>
+                <th>Delivery</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -221,22 +302,95 @@ function UsersDrawer({ onClose }: { onClose: () => void }) {
                     <td>{i.name}</td>
                     <td className="cell-sub">{i.email}</td>
                     <td className="mono">{i.role}</td>
+                    <td className="cell-sub">
+                      {i.deliveryStatus || '—'}
+                      {i.deliveryError ? (
+                        <div className="cell-sub" style={{ maxWidth: 220 }}>
+                          {i.deliveryError}
+                        </div>
+                      ) : null}
+                    </td>
                     <td>
-                      <button
-                        type="button"
-                        className="linkish"
-                        onClick={async () => {
-                          const url = `${window.location.origin}${i.invitePath}`;
-                          try {
-                            await navigator.clipboard.writeText(url);
-                            success('Invite link copied');
-                          } catch {
-                            notifyError(url);
-                          }
-                        }}
-                      >
-                        Copy link
-                      </button>
+                      <div className="btn-row" style={{ flexWrap: 'wrap', gap: 8 }}>
+                        <button
+                          type="button"
+                          className="linkish"
+                          disabled={busy}
+                          onClick={async () => {
+                            setBusy(true);
+                            try {
+                              const res = await userService.rotateInvitationLink(i.id);
+                              const path = res.invitePath;
+                              if (!path) {
+                                notifyError('No invite link returned');
+                                return;
+                              }
+                              const url = `${window.location.origin}${path}`;
+                              setLastInvitePath(path);
+                              try {
+                                await navigator.clipboard.writeText(url);
+                                success(res.message || 'Invite link copied');
+                              } catch {
+                                notifyError(url);
+                              }
+                              setTick((t) => t + 1);
+                            } catch (e) {
+                              notifyError(e instanceof Error ? e.message : 'Could not create link');
+                            } finally {
+                              setBusy(false);
+                            }
+                          }}
+                        >
+                          Copy link
+                        </button>
+                        <button
+                          type="button"
+                          className="linkish"
+                          disabled={busy}
+                          onClick={async () => {
+                            setBusy(true);
+                            try {
+                              const res = await userService.resendInvitation(i.id);
+                              if (res.invitePath) setLastInvitePath(res.invitePath);
+                              if (res.emailSent) success(res.message || 'Invitation email resent');
+                              else notifyError(res.message || 'Email delivery failed — copy the new link');
+                              setTick((t) => t + 1);
+                            } catch (e) {
+                              notifyError(e instanceof Error ? e.message : 'Resend failed');
+                            } finally {
+                              setBusy(false);
+                            }
+                          }}
+                        >
+                          Resend email
+                        </button>
+                        <button
+                          type="button"
+                          className="linkish"
+                          disabled={busy}
+                          onClick={async () => {
+                            const ok = await confirm({
+                              title: 'Revoke invitation',
+                              message: `Revoke the pending invitation for ${i.email}? The link will stop working.`,
+                              confirmLabel: 'Revoke',
+                              danger: true,
+                            });
+                            if (!ok) return;
+                            setBusy(true);
+                            try {
+                              await userService.revokeInvitation(i.id);
+                              success('Invitation revoked');
+                              setTick((t) => t + 1);
+                            } catch (e) {
+                              notifyError(e instanceof Error ? e.message : 'Revoke failed');
+                            } finally {
+                              setBusy(false);
+                            }
+                          }}
+                        >
+                          Revoke
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -277,8 +431,12 @@ function UsersDrawer({ onClose }: { onClose: () => void }) {
       </Button>
 
       <div className="section-title" style={{ marginTop: 18 }}>
-        Invite user
+        Invite department chair (or other role)
       </div>
+      <p className="section-sub">
+        Prefer role <b>DEPARTMENT_CHAIR</b> and pick the department under Organization. After create, copy the invite
+        link and send it to the chair.
+      </p>
       <div className="field">
         <label>Name</label>
         <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
@@ -306,6 +464,46 @@ function UsersDrawer({ onClose }: { onClose: () => void }) {
           options={orgs.map((o) => ({ value: o.id, label: `${o.name} (${o.type})` }))}
           placeholder="Type department or unit…"
         />
+      </div>
+      <div className="field">
+        <label>Permission template</label>
+        <select
+          value={form.permissionTemplate}
+          onChange={(e) => {
+            const t = e.target.value;
+            setForm({
+              ...form,
+              permissionTemplate: t,
+              permissions: t === 'CUSTOM' ? form.permissions : TEMPLATE_PERMS[t] || [],
+            });
+          }}
+        >
+          <option value="ROLE_DEFAULTS">Use role defaults</option>
+          <option value="LECTURER_DEFAULTS">Lecturer defaults</option>
+          <option value="REVIEWER">Reviewer</option>
+          <option value="COORDINATOR">Coordinator</option>
+          <option value="CUSTOM">Custom</option>
+        </select>
+      </div>
+      <div className="field">
+        <label>Permissions</label>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+          {INVITE_PERM_OPTIONS.map((p) => (
+            <label key={p.code} className="checkbox-row" style={{ cursor: 'pointer', fontSize: 13 }}>
+              <input
+                type="checkbox"
+                checked={form.permissions.includes(p.code)}
+                onChange={(e) => {
+                  const next = e.target.checked
+                    ? [...form.permissions, p.code]
+                    : form.permissions.filter((x) => x !== p.code);
+                  setForm({ ...form, permissionTemplate: 'CUSTOM', permissions: next });
+                }}
+              />{' '}
+              {p.label}
+            </label>
+          ))}
+        </div>
       </div>
       {lastInvitePath && (
         <p className="section-sub">

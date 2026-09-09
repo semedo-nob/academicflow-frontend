@@ -1,6 +1,14 @@
 const API_BASE = import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_BASE_URL || '/api';
 const DEFAULT_TENANT = '11111111-1111-1111-1111-111111111111';
 
+type TokenGetter = () => Promise<string | null>;
+let clerkTokenGetter: TokenGetter | null = null;
+
+/** Registered by ClerkTokenBridge so API calls attach Authorization: Bearer <session>. */
+export function setClerkTokenGetter(getter: TokenGetter | null) {
+  clerkTokenGetter = getter;
+}
+
 export function resolveTenantId(): string {
   const stored = localStorage.getItem('af_tenant');
   if (stored && /^[0-9a-fA-F-]{36}$/.test(stored)) return stored;
@@ -19,6 +27,24 @@ export function setActiveDepartmentId(id: string | null) {
   else localStorage.removeItem('af_active_department');
 }
 
+export function setTenantId(id: string) {
+  if (/^[0-9a-fA-F-]{36}$/.test(id)) {
+    localStorage.setItem('af_tenant', id);
+  }
+}
+
+/** Wipe identity headers/storage so the next account cannot inherit the previous one. */
+export function clearClientSession(opts?: { keepRemember?: boolean }) {
+  localStorage.removeItem('af_auth');
+  localStorage.removeItem('af_user');
+  localStorage.removeItem('af_tenant');
+  localStorage.removeItem('af_active_department');
+  if (!opts?.keepRemember) {
+    localStorage.removeItem('af_remember');
+    localStorage.removeItem('af_remember_email');
+  }
+}
+
 function resolveUserEmail(): string {
   try {
     const raw = localStorage.getItem('af_user');
@@ -30,15 +56,25 @@ function resolveUserEmail(): string {
   }
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function buildHeaders(extra?: Record<string, string>): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     'X-Tenant-Id': resolveTenantId(),
-    ...(options.headers as Record<string, string> | undefined),
+    ...(extra || {}),
   };
-  const email = resolveUserEmail();
-  if (email) headers['X-User-Email'] = email;
+  const token = clerkTokenGetter ? await clerkTokenGetter() : null;
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  } else {
+    const email = resolveUserEmail();
+    if (email) headers['X-User-Email'] = email;
+  }
   const dept = resolveActiveDepartmentId();
   if (dept) headers['X-Active-Department-Id'] = dept;
+  return headers;
+}
+
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const headers = await buildHeaders(options.headers as Record<string, string> | undefined);
   if (!(options.body instanceof FormData)) {
     headers['Content-Type'] = headers['Content-Type'] || 'application/json';
   }
@@ -81,17 +117,14 @@ export const api = {
       method: 'PUT',
       body: body !== undefined ? JSON.stringify(body) : undefined,
     }),
+  del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
   upload: <T>(path: string, formData: FormData) =>
     request<T>(path, {
       method: 'POST',
       body: formData,
     }),
   download: async (path: string, fallbackName: string) => {
-    const headers: Record<string, string> = { 'X-Tenant-Id': resolveTenantId() };
-    const email = resolveUserEmail();
-    if (email) headers['X-User-Email'] = email;
-    const dept = resolveActiveDepartmentId();
-    if (dept) headers['X-Active-Department-Id'] = dept;
+    const headers = await buildHeaders();
     const res = await fetch(`${API_BASE}${path}`, { headers });
     if (!res.ok) {
       let message = res.statusText;
@@ -115,9 +148,3 @@ export const api = {
     URL.revokeObjectURL(url);
   },
 };
-
-export function setTenantId(id: string) {
-  if (/^[0-9a-fA-F-]{36}$/.test(id)) {
-    localStorage.setItem('af_tenant', id);
-  }
-}

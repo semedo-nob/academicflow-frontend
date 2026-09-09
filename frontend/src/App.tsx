@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-route
 import type { ReactNode } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { FeedbackProvider } from './context/FeedbackContext';
+import { ClerkSessionSync } from './components/auth/ClerkSessionSync';
 import { AppLayout } from './layouts/AppLayout';
 import { PlatformLayout } from './layouts/PlatformLayout';
 import { canAccessPath, homePath, isSuperAdmin } from './lib/access';
@@ -71,9 +72,11 @@ export default function App() {
     <AppProvider>
       <FeedbackProvider>
         <BrowserRouter>
+          <ClerkSessionSync />
           <Routes>
             <Route path="/" element={<LandingPage />} />
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/invite/:token" element={<LoginPage />} />
 
             <Route
               path="/platform"
@@ -137,7 +140,14 @@ export default function App() {
 }
 
 function RequireAuth({ children }: { children: ReactNode }) {
-  const { authenticated } = useApp();
+  const { authenticated, authLoading } = useApp();
+  if (authLoading) {
+    return (
+      <div style={{ padding: 48, textAlign: 'center' }}>
+        <p className="hint">Loading workspace…</p>
+      </div>
+    );
+  }
   if (!authenticated) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }

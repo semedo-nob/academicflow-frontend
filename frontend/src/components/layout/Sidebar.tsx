@@ -29,6 +29,7 @@ type Item = { key: NavKey; to: string; label: string; icon: ReactNode; badge?: s
 
 const MAIN: Item[] = [
   { key: 'dashboard', to: '/dashboard', label: 'Dashboard', icon: <IconDashboard /> },
+  { key: 'onboarding', to: '/onboarding', label: 'Institution setup', icon: <IconUsers /> },
   { key: 'organization', to: '/organization', label: 'Organization', icon: <IconOrg /> },
   { key: 'lecturers', to: '/lecturers', label: 'Lecturers', icon: <IconUsers /> },
   { key: 'units', to: '/units', label: 'Academic Units', icon: <IconBook /> },

@@ -36,6 +36,8 @@ class AppUser(
     var role: String = "VIEWER",
     var organizationNodeId: UUID? = null,
     var passwordHash: String? = null,
+    /** Stable Clerk user id (e.g. user_…). Null until linked via Clerk auth. */
+    var clerkUserId: String? = null,
     var active: Boolean = true,
     var accountStatus: String = "ACTIVE",
     var lastLoginAt: Instant? = null,
@@ -219,7 +221,36 @@ class Allocation(
     var decisionNote: String? = null,
     var createdBy: UUID? = null,
     var createdAt: Instant = Instant.now(),
-    var updatedAt: Instant = Instant.now()
+    var updatedAt: Instant = Instant.now(),
+    var workflowStatus: String = "DRAFT"
+)
+
+@Entity
+@Table(name = "allocation_comments")
+class AllocationComment(
+    @Id var id: UUID = UUID.randomUUID(),
+    var tenantId: UUID = UUID(0, 0),
+    var allocationId: UUID = UUID(0, 0),
+    var authorId: UUID = UUID(0, 0),
+    var body: String = "",
+    var commentType: String = "COMMENT",
+    var createdAt: Instant = Instant.now(),
+    var updatedAt: Instant = Instant.now(),
+    var resolvedAt: Instant? = null,
+    var resolvedBy: UUID? = null
+)
+
+@Entity
+@Table(name = "user_permissions")
+class UserPermission(
+    @Id var id: UUID = UUID.randomUUID(),
+    var tenantId: UUID = UUID(0, 0),
+    var userId: UUID = UUID(0, 0),
+    var permission: String = "",
+    var effect: String = "GRANT",
+    var organizationNodeId: UUID? = null,
+    var grantedBy: UUID? = null,
+    var createdAt: Instant = Instant.now()
 )
 
 @Entity
@@ -400,12 +431,22 @@ class Invitation(
     var fullName: String = "",
     var role: String = "VIEWER",
     var organizationNodeId: UUID? = null,
+    /** Stored token value — SHA-256 hex for new invites; may be legacy plaintext until rotated. */
     var token: String = "",
+    var tokenHash: String? = null,
     var status: String = "PENDING",
     var invitedBy: UUID? = null,
     var createdAt: Instant = Instant.now(),
     var expiresAt: Instant = Instant.now().plusSeconds(60L * 60 * 24 * 14),
-    var acceptedAt: Instant? = null
+    var acceptedAt: Instant? = null,
+    var revokedAt: Instant? = null,
+    var deliveryStatus: String = "QUEUED",
+    var deliveryError: String? = null,
+    var lastSentAt: Instant? = null,
+    var emailProvider: String? = null,
+    /** JSON array of permission codes assigned at invite time. */
+    var permissionsJson: String? = null,
+    var permissionTemplate: String? = null
 )
 
 @Entity

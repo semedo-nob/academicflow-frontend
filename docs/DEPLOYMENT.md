@@ -1,16 +1,127 @@
 # Deployment
 
-## Target architecture
+## Northflank
+
+Preferred durable host for this monorepo.
+
+### Prerequisites
+
+1. Install CLI: `npm i -g @northflank/cli`
+2. `northflank login` (API token from Account Settings → API → Tokens)
+3. Link the GitHub monorepo in Northflank (services build via Dockerfile)
+4. Provide Clerk + Resend secrets as template/argument overrides (never commit them)
+
+### Repo artifacts
+
+See [`deploy/northflank/README.md`](../deploy/northflank/README.md):
+
+- `template.json` — project + Postgres + API + web + secret group
+- `addon-postgres.json` / `deploy.sh` — CLI helpers
+- `frontend/Dockerfile` — nginx SPA
+- `backend/Dockerfile` — Spring Boot API
+
+### After deploy
+
+1. Copy public DNS for `academicflow-web` and `academicflow-api`
+2. Set `APP_BASE_URL` / `CORS_ALLOWED_ORIGINS` to the web HTTPS origin
+3. Rebuild web with `VITE_API_BASE_URL=https://<api-dns>/api`
+4. Add both domains in Clerk (redirects) and verify Resend sender domain
+5. Health: `GET https://<api-dns>/actuator/health`
+
+Local tunnels / `trycloudflare.com` are **not** production.
+
+---
+
+## Required production environment variables
+
+Never commit real values. Set these in the host secret store (Vercel / Railway / VPS).
+
+### Frontend (Vercel)
+
+| Variable | Example / notes |
+|----------|-----------------|
+| `VITE_API_BASE_URL` | `https://api.example.com/api` |
+| `VITE_CLERK_PUBLISHABLE_KEY` | `pk_live_…` (publishable only) |
+
+Build: `cd frontend && npm ci && npm run build`. Root directory: `frontend`. SPA rewrites: `frontend/vercel.json`.
+
+### Backend (Railway / Docker / VPS)
+
+| Variable | Required | Notes |
+|----------|----------|-------|
+| `SPRING_PROFILES_ACTIVE` | yes | `prod` |
+| `AUTH_MODE` | yes | **must be `clerk`** (prod profile rejects `auto` / `legacy`) |
+| `CLERK_SECRET_KEY` | yes | `sk_live_…` |
+| `CLERK_ISSUER` | yes* | e.g. `https://<instance>.clerk.accounts.dev` |
+| `CLERK_JWKS_URL` | optional | overrides issuer JWKS |
+| `CLERK_API_BASE` | optional | default `https://api.clerk.com` |
+| `EMAIL_PROVIDER` | yes | `resend` (or `postal`) — **not** `console` |
+| `RESEND_API_KEY` | if resend | required in prod when provider=resend |
+| `EMAIL_FROM` | if resend/postal | verified sender |
+| `POSTAL_API_URL` / `POSTAL_API_KEY` | if postal | self-hosted |
+| `APP_BASE_URL` | yes | durable `https://…` frontend origin — **not** localhost / trycloudflare |
+| `INVITATION_EXPIRY_HOURS` | optional | default `336` |
+| `CORS_ALLOWED_ORIGINS` | yes | exact frontend origin(s) |
+| `DB_HOST` `DB_PORT` `DB_NAME` `DB_USERNAME` `DB_PASSWORD` | yes | managed Postgres |
+| `SERVER_PORT` | optional | default `8081` |
+| `SUPER_ADMIN_EMAIL` | optional | promotes/creates SUPER_ADMIN row on boot (no password stored) |
+| `SUPER_ADMIN_NAME` | optional | display name for bootstrap |
+
+\* Or set `CLERK_JWKS_URL` instead of issuer.
+
+### Production fail-closed rules
+
+On `prod` / `production` profile, the API **refuses to start** if:
+
+- `AUTH_MODE` is `auto` or `legacy`
+- `AUTH_MODE=clerk` but `CLERK_SECRET_KEY` or issuer/JWKS missing
+- `APP_BASE_URL` is blank, `http://`, localhost, `127.0.0.1`, or `*.trycloudflare.com`
+- `EMAIL_PROVIDER=resend` without `RESEND_API_KEY` / `EMAIL_FROM`
+- `EMAIL_PROVIDER=console`
+
+Missing Resend credentials never produce a fake “email sent” result: `ResendEmailService` returns `success=false` and invitations stay `PENDING` with `deliveryStatus=FAILED` (Copy link / Resend remain available).
+
+---
+
+## Clerk setup
+
+1. Create a Clerk application (React / SPA).
+2. Add production frontend URL to allowed origins / redirect URLs (`/login`, `/invite/*`).
+3. Set `VITE_CLERK_PUBLISHABLE_KEY` on the frontend host.
+4. Set `CLERK_SECRET_KEY` + `CLERK_ISSUER` on the API host with `AUTH_MODE=clerk`.
+5. AcademicFlow authorization stays in Postgres (memberships, roles, permissions) — not Clerk metadata.
+
+Super Admin test account: set `SUPER_ADMIN_EMAIL` to the Clerk user email (e.g. operator mailbox). Create/sign-in password **only in Clerk** — never in git, seeds, or docs.
+
+---
+
+## Resend setup
+
+1. Verify a sending domain in Resend.
+2. Create an API key; set `RESEND_API_KEY` and `EMAIL_FROM`.
+3. Set `EMAIL_PROVIDER=resend`.
+4. Invitation create always calls `EmailService.send` — never Resend SDK from invitation business logic.
+5. On failure: invitation remains pending; UI shows failure + Copy / Retry.
+
+Postal: set `EMAIL_PROVIDER=postal` plus `POSTAL_API_URL` / `POSTAL_API_KEY`.
+
+---
+
+## Invitation URLs
+
+Production emails use:
 
 ```text
-Internet → Vercel (React) → HTTPS → Nginx/VPS → Spring Boot → private PostgreSQL
+{APP_BASE_URL}/invite/{secure-token}
 ```
 
-PostgreSQL must not be publicly exposed. Only 80/443 on the VPS.
+- Token is cryptographically random; DB stores **SHA-256 hash** only.
+- List endpoints never return usable tokens; Copy link rotates and returns a fresh path.
+- Frontend route `/invite/:token` opens the existing accept + Clerk flow.
+
+---
 
 ## Frontend (Vercel)
-
-Root directory: `frontend`
 
 ```bash
 cd frontend
@@ -18,56 +129,77 @@ npm ci
 npm run build
 ```
 
-`vercel.json` rewrites SPA routes to `index.html`.
-
 Environment:
 
 ```text
 VITE_API_BASE_URL=https://api.example.com/api
+VITE_CLERK_PUBLISHABLE_KEY=pk_…
 ```
 
 Do not deploy Spring Boot to Vercel.
 
-## Backend (VPS)
+---
+
+## Backend (Railway / Docker / VPS)
 
 ```bash
-# Database (internal network; avoid publishing 5432 in production)
-docker compose up -d db
-
-# API image
 docker build -t academicflow-api ./backend
 docker run -d --name academicflow-api \
-  --network academicflow_af_internal \
+  --network <private> \
   -e SPRING_PROFILES_ACTIVE=prod \
-  -e DB_HOST=db \
+  -e AUTH_MODE=clerk \
+  -e DB_HOST=… \
   -e DB_PORT=5432 \
   -e DB_NAME=academicflow \
-  -e DB_USERNAME=academicflow \
-  -e DB_PASSWORD=change-me \
+  -e DB_USERNAME=… \
+  -e DB_PASSWORD=… \
+  -e CLERK_SECRET_KEY=… \
+  -e CLERK_ISSUER=… \
+  -e EMAIL_PROVIDER=resend \
+  -e RESEND_API_KEY=… \
+  -e EMAIL_FROM='AcademicFlow <noreply@example.com>' \
+  -e APP_BASE_URL=https://app.example.com \
   -e CORS_ALLOWED_ORIGINS=https://app.example.com \
   -p 127.0.0.1:8081:8081 \
   academicflow-api
 ```
 
-Put Nginx in front for TLS termination to `127.0.0.1:8081`.
+Health check: `GET /actuator/health`.
 
-Environment placeholders also live in `.env.example`. Never commit secrets.
+Flyway migrations run automatically on boot (`V1`–`V15+`). Do not edit applied SQL; add a new version.
 
-## Railway readiness (audit)
+---
 
-AcademicFlow is not Railway-configured yet. Before deploying:
+## Local development
 
-| Area | Status / blocker |
-|---|---|
-| Frontend | Vite build works; set `VITE_API_BASE_URL` to the public API URL. Prefer Vercel or Railway static site with SPA rewrite. |
-| Backend | Needs a Dockerfile-ready JVM service (exists under `backend/Dockerfile`). Set `DB_*`, `JWT_SECRET`, `CORS_ALLOWED_ORIGINS`, `DEFAULT_TENANT_ID`, `SPRING_PROFILES_ACTIVE=prod`. |
-| PostgreSQL | Use Railway Postgres; do **not** expose 5432 publicly. Run Flyway on boot (already wired). |
-| File uploads | Course outlines stored as BYTEA (MVP). Prefer object storage for production. Install `tesseract-ocr` in the API image for scanned PDF/image OCR; without it, uploads still succeed with `OCR_REQUIRED`. |
-| Auth | Demo email-header auth is **not** production-safe. Add JWT/session before any chairperson production link. |
-| Health | Actuator `/actuator/health` exists — point Railway healthcheck there. |
-| CORS | Must list the exact frontend origin. |
-| Secrets | Never commit `.env`; use Railway variables. |
-| Multi-tenant | `X-Tenant-Id` isolation is enforced in repositories; harden auth so clients cannot spoof another tenant. |
-| OCR | Prefers local `tesseract`. If missing, uses Docker image `franky1/tesseract` when present (`docker pull franky1/tesseract`). Override with `ACADEMICFLOW_TESSERACT_IMAGE`. Scanned allocation PDFs are OCR'd then parsed into Staff Name / Course Code / Course Title rows. |
+```bash
+cp .env.example .env   # never commit .env
+docker compose up -d db
+# AUTH_MODE=auto (default) allows legacy header auth without Clerk keys
+cd backend && SPRING_PROFILES_ACTIVE=dev ./gradlew bootRun
+cd frontend && npm run dev
+```
 
-Do not deploy until JWT auth and object-storage for outlines are addressed.
+Local defaults may use `127.0.0.1` — that is **development only**.
+
+---
+
+## Troubleshooting
+
+| Symptom | Check |
+|---------|--------|
+| App won't start on prod | `AUTH_MODE`, Clerk keys, `APP_BASE_URL`, email provider keys (see fail-closed rules) |
+| 401 on all APIs | Missing/invalid Clerk Bearer token; `CLERK_ISSUER` mismatch |
+| Invitation “created but email failed” | Resend key/from/domain; Copy link still works |
+| Invite link opens wrong host | `APP_BASE_URL` must be the production frontend |
+| CORS errors | `CORS_ALLOWED_ORIGINS` must match the SPA origin exactly |
+
+---
+
+## Security requirements (production)
+
+- `AUTH_MODE=clerk` only — no header-email auth
+- Never trust client role / tenant / department / permission claims
+- Department scope enforced by `ScopeService` + memberships
+- Permission checks via `PermissionService` (role defaults + grants − revokes)
+- Audit invitation, permission, allocation, and membership changes without logging raw tokens

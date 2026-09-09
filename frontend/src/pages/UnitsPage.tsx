@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { UNITS } from '../data/mockData';
 import { useApp } from '../context/AppContext';
 import { useFeedback } from '../context/FeedbackContext';
 import { useAsyncData } from '../hooks/useAsyncData';
@@ -102,7 +101,7 @@ export function UnitsPage() {
   const [searchParams] = useSearchParams();
   const statusParam = searchParams.get('status') || '';
   const [tick, setTick] = useState(0);
-  const { data: units, fromApi } = useAsyncData(() => unitService.list(), UNITS, [tick]);
+  const { data: units, fromApi } = useAsyncData(() => unitService.list(), [], [tick]);
   const { data: orgs } = useAsyncData(() => organizationService.list(), [], []);
   const depts = orgs.filter((o) => o.type === 'Department');
   const [showAdd, setShowAdd] = useState(false);

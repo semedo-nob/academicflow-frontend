@@ -1,4 +1,4 @@
-import { api, setTenantId } from './api';
+import { api, setTenantId, setActiveDepartmentId } from './api';
 import type {
   AcademicUnit,
   ApprovalItem,
@@ -110,6 +110,34 @@ function mapCandidate(c: {
 }
 
 export const authService = {
+  authMode: () => api.get<{ clerkEnabled: boolean; legacyEnabled: boolean }>('/auth/mode'),
+  establishClerkSession: async () => {
+    const res = await api.post<{
+      email: string;
+      name: string;
+      role: string;
+      tenantId: string;
+      userId?: string;
+      organizationNodeId?: string | null;
+      departmentName?: string | null;
+      activeDepartmentId?: string | null;
+      activeDepartmentName?: string | null;
+      activeRole?: string | null;
+      memberships?: {
+        id: string;
+        organizationNodeId: string;
+        organizationName: string;
+        organizationType: string;
+        role: string;
+        isPrimary: boolean;
+      }[];
+    }>('/auth/session');
+    setTenantId(res.tenantId);
+    localStorage.setItem('af_user', JSON.stringify(res));
+    const deptId = res.activeDepartmentId || res.organizationNodeId || null;
+    setActiveDepartmentId(deptId);
+    return res;
+  },
   login: async (email: string, password?: string) => {
     const res = await api.post<{
       email: string;
@@ -133,6 +161,8 @@ export const authService = {
     }>('/auth/login', { email, password });
     setTenantId(res.tenantId);
     localStorage.setItem('af_user', JSON.stringify(res));
+    const deptId = res.activeDepartmentId || res.organizationNodeId || null;
+    setActiveDepartmentId(deptId);
     return res;
   },
   registerInstitution: (body: {
@@ -163,9 +193,21 @@ export const authService = {
       userId?: string;
       organizationNodeId?: string | null;
       departmentName?: string | null;
+      activeDepartmentId?: string | null;
+      activeDepartmentName?: string | null;
+      activeRole?: string | null;
+      memberships?: {
+        id: string;
+        organizationNodeId: string;
+        organizationName: string;
+        organizationType: string;
+        role: string;
+        isPrimary: boolean;
+      }[];
     }>('/auth/accept-invitation', body);
     setTenantId(res.tenantId);
     localStorage.setItem('af_user', JSON.stringify(res));
+    setActiveDepartmentId(res.activeDepartmentId || res.organizationNodeId || null);
     return res;
   },
 };
@@ -465,6 +507,31 @@ export const organizationService = {
   },
   create: (body: { name: string; type: string; parentId?: string | null; parentName?: string | null }) =>
     api.post('/organization', body),
+  update: (
+    id: string,
+    body: {
+      name?: string;
+      type?: string;
+      parentId?: string | null;
+      parentName?: string | null;
+      clearParent?: boolean;
+    },
+  ) => api.put(`/organization/${id}`, body),
+  delete: (id: string, cascade = false) =>
+    api.del<{ ok: boolean; id: string; cascade: boolean }>(
+      `/organization/${id}?cascade=${cascade ? 'true' : 'false'}`,
+    ),
+  importCsv: (file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return api.upload<{
+      created: number;
+      updated: number;
+      skipped: number;
+      errors: number;
+      details: string[];
+    }>('/organization/import', fd);
+  },
 };
 
 export const dashboardService = {
@@ -717,11 +784,18 @@ export const userService = {
         name: string;
         role: string;
         organizationNodeId: string | null;
+        organizationName?: string | null;
         status: string;
-        token: string;
-        invitePath: string;
+        token?: string | null;
+        invitePath?: string | null;
         createdAt: string;
         expiresAt: string;
+        deliveryStatus?: string | null;
+        deliveryError?: string | null;
+        emailProvider?: string | null;
+        lastSentAt?: string | null;
+        emailSent?: boolean | null;
+        message?: string | null;
       }[]
     >('/admin/invitations'),
   invite: (body: {
@@ -730,16 +804,39 @@ export const userService = {
     role: string;
     organizationNodeId?: string | null;
     organization?: string | null;
+    permissionTemplate?: string | null;
+    permissions?: string[] | null;
   }) =>
     api.post<{
       id: string;
       email: string;
       name: string;
       role: string;
-      invitePath: string;
-      token: string;
+      invitePath?: string | null;
+      token?: string | null;
       status: string;
+      deliveryStatus?: string | null;
+      deliveryError?: string | null;
+      emailSent?: boolean | null;
+      message?: string | null;
+      permissions?: string[];
     }>('/admin/invitations', body),
+  resendInvitation: (id: string) =>
+    api.post<{
+      id: string;
+      invitePath?: string | null;
+      deliveryStatus?: string | null;
+      emailSent?: boolean | null;
+      message?: string | null;
+    }>(`/admin/invitations/${id}/resend`),
+  rotateInvitationLink: (id: string) =>
+    api.post<{
+      id: string;
+      invitePath?: string | null;
+      message?: string | null;
+    }>(`/admin/invitations/${id}/rotate-link`),
+  revokeInvitation: (id: string) =>
+    api.post<{ id: string; status: string; message?: string | null }>(`/admin/invitations/${id}/revoke`),
   assignChair: (body: { userId?: string; email?: string; departmentId?: string; department?: string }) =>
     api.post<{
       id: string;

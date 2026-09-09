@@ -33,12 +33,16 @@ export function clearSetupFlags() {
 type OrgLike = { type: string; id: string };
 type MembershipLike = Pick<Membership, 'organizationNodeId' | 'role'> & { role: string };
 
-/** True when institution admin should be guided through department + chair setup. */
+/**
+ * True when institution admin still needs departments and/or chairs.
+ * Incomplete until every Department has an active chair OR a pending chair invite.
+ * Skip only hides the dashboard banner — nav "Institution setup" stays available.
+ */
 export function needsInstitutionSetup(
   orgs: OrgLike[],
   memberships: MembershipLike[],
+  pendingChairDeptIds: Iterable<string> = [],
 ): boolean {
-  if (isSetupComplete() || isSetupSkipped()) return false;
   const depts = orgs.filter((o) => o.type === 'Department');
   if (depts.length === 0) return true;
   const chairDepts = new Set(
@@ -46,5 +50,16 @@ export function needsInstitutionSetup(
       .filter((m) => m.role.toUpperCase() === 'DEPARTMENT_CHAIR')
       .map((m) => m.organizationNodeId),
   );
-  return chairDepts.size === 0;
+  const pending = new Set(pendingChairDeptIds);
+  return depts.some((d) => !chairDepts.has(d.id) && !pending.has(d.id));
+}
+
+/** Banner on dashboard — respects skip, but reappears if setup is incomplete and skip cleared. */
+export function shouldShowSetupBanner(
+  orgs: OrgLike[],
+  memberships: MembershipLike[],
+  pendingChairDeptIds: Iterable<string> = [],
+): boolean {
+  if (isSetupSkipped()) return false;
+  return needsInstitutionSetup(orgs, memberships, pendingChairDeptIds);
 }

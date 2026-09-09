@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CONFLICTS } from '../data/mockData';
 import { useAsyncData } from '../hooks/useAsyncData';
 import { useFeedback } from '../context/FeedbackContext';
 import { conflictService } from '../services';
@@ -13,7 +12,7 @@ export function ConflictsPage() {
   const [tick, setTick] = useState(0);
   const navigate = useNavigate();
   const { confirm, error: notifyError, success } = useFeedback();
-  const { data: conflicts, fromApi } = useAsyncData(() => conflictService.list(), CONFLICTS, [tick]);
+  const { data: conflicts, fromApi } = useAsyncData(() => conflictService.list(), [], [tick]);
   const filtered = conflicts.filter((c) => {
     if (tab === 1) return c.category === 'Workload';
     if (tab === 2) return c.category === 'Timetable';

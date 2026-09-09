@@ -10,7 +10,7 @@ Guide for engineers working in this monorepo. Product overview and licensing liv
 |-------|------------|
 | Frontend | React 19, TypeScript, Vite 8, React Router 7 |
 | Backend | Spring Boot 4, Kotlin, Spring Data JPA, Validation, Actuator |
-| Database | PostgreSQL 16 + Flyway (`V1`–`V12`) |
+| Database | PostgreSQL 16 + Flyway (`V1`–`V14`) |
 | Import / OCR | PDFBox; optional local `tesseract` or Docker image `franky1/tesseract` |
 
 ---
@@ -71,6 +71,41 @@ Dev DB defaults (also in `application-dev.properties`): host `127.0.0.1`, port *
 
 Production must set `DB_*`, `JWT_SECRET`, `CORS_ALLOWED_ORIGINS` via environment — never commit real secrets.
 
+### Email (invitation delivery)
+
+Provider-agnostic `EmailService` (`console` | `resend` | `postal`). Invitation business logic never calls a vendor SDK directly.
+
+| Variable | Purpose |
+|----------|---------|
+| `EMAIL_PROVIDER` | `console` (dev default), `resend`, or `postal` |
+| `EMAIL_FROM` | From address (required for resend/postal) |
+| `RESEND_API_KEY` | Resend API key |
+| `POSTAL_API_URL` | Postal server base URL |
+| `POSTAL_API_KEY` | Postal server API key |
+| `APP_BASE_URL` | Public frontend origin used in invite emails |
+| `INVITATION_EXPIRY_HOURS` | Default `336` (14 days) |
+
+`EMAIL_PROVIDER=console` is blocked when a `prod`/`production` Spring profile is active. Invitation create succeeds even if email delivery fails — admins can **Copy link** / **Resend**.
+
+### Clerk authentication
+
+Clerk is the identity provider; AcademicFlow keeps institution/department/role authority in Postgres.
+
+1. Create a Clerk application (React / SPA).
+2. Set frontend `VITE_CLERK_PUBLISHABLE_KEY=pk_…`.
+3. Set backend `CLERK_SECRET_KEY=sk_…` and `CLERK_ISSUER=https://<your-instance>.clerk.accounts.dev` (or production issuer).
+4. Optional: `CLERK_JWKS_URL` if you need an explicit JWKS endpoint.
+5. Prefer `AUTH_MODE=clerk` in deployed environments; leave `auto` for local demos without keys (falls back to legacy headers).
+
+Flows:
+
+- **Sign-in** → `Authorization: Bearer <Clerk session JWT>` → `POST /api/auth/session` links `users.clerk_user_id` by email / existing Clerk id.
+- **Invitation** → email/link with opaque token → `/login?invite=<token>` → Clerk sign-in/up with invited email → `POST /api/auth/accept-invitation` (email must match) → membership + role → existing dashboard.
+
+Webhooks are optional. Request-time JWT verification + user lookup remains authoritative so authorization does not depend on webhook lag.
+
+Allowed Clerk redirect URLs should include your `APP_BASE_URL` and `/login` (including `?invite=` return paths).
+
 ### Demo identities
 
 | Email | Role (seed) |
@@ -79,28 +114,28 @@ Production must set `DB_*`, `JWT_SECRET`, `CORS_ALLOWED_ORIGINS` via environment
 | `m.otieno@uonbi.ac.ke` | Department Chair — Mathematics |
 | `admin@uonbi.ac.ke` | Super Admin |
 
-Password is ignored in demo mode (`passwordHash=local`). Tenant: `11111111-1111-1111-1111-111111111111`.
+Password is ignored in demo / legacy mode (`passwordHash=local`). Tenant: `11111111-1111-1111-1111-111111111111`. With Clerk, seed users are linked on first successful session when email matches.
 
-After membership / scoping changes, **re-login** so `memberships` and `activeDepartmentId` refresh in `localStorage`.
+After membership / scoping changes, **re-login** (or re-establish Clerk session) so `memberships` and `activeDepartmentId` refresh.
 
 ---
 
 ## Auth & request headers
 
-Current demo auth is **header-based** (not JWT):
+| Header / credential | Purpose |
+|---------------------|---------|
+| `Authorization: Bearer <Clerk JWT>` | Preferred when Clerk is enabled — verifies identity, resolves `clerk_user_id` |
+| `X-Tenant-Id` | Institution tenant (overridden by linked user’s tenant when Clerk identity is present) |
+| `X-User-Email` | Legacy demo principal when `AUTH_MODE=legacy` or `auto` without Clerk |
+| `X-Active-Department-Id` | Optional active department; must be an authorized membership |
 
-| Header | Purpose |
-|--------|---------|
-| `X-Tenant-Id` | Required for institution APIs — tenant isolation |
-| `X-User-Email` | Resolves `UserContext` principal |
-| `X-Active-Department-Id` | Optional chair context; must be an authorized membership |
+`GET /api/auth/mode` reports `{ clerkEnabled, legacyEnabled }` for the SPA.
 
-Platform APIs (`/api/platform/**`) require an active `SUPER_ADMIN` email and reject institution users (`PlatformAuthFilter`).
+Platform APIs (`/api/platform/**`) require an active `SUPER_ADMIN` and reject institution users (`PlatformAuthFilter`).
 
-Frontend helpers: `frontend/src/services/api.ts` (`resolveTenantId`, `resolveActiveDepartmentId`).
+Frontend: `ClerkProvider` when `VITE_CLERK_PUBLISHABLE_KEY` is set; `api.ts` attaches the Bearer token via `setClerkTokenGetter`.
 
 ---
-
 ## Tenancy & department scope
 
 - **Institution-wide** roles (`INSTITUTION_ADMIN`, `SCHOOL_DEAN`, `SUPER_ADMIN`, …): `ScopeService.authorizedDepartmentIds()` returns `null` → no department filter.  
@@ -162,6 +197,8 @@ OCR for large PDFs can take many minutes; Vite proxy timeout is raised for that 
 | V10 | Document ingestion metadata on outlines |
 | V11 | Organization memberships + students scaffold |
 | V12 | Request attachments + messages + briefing note |
+| V13 | Invitation delivery status + token_hash |
+| V14 | `users.clerk_user_id` unique (partial) |
 
 Migrations run automatically on API boot. Do not edit applied SQL; add a new version.
 

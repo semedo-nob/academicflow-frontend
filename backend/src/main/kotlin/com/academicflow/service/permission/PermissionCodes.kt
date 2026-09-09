@@ -1,0 +1,108 @@
+package com.academicflow.service.permission
+
+/**
+ * Capability codes. Roles provide defaults; user_permissions apply GRANT/REVOKE overrides.
+ * AcademicFlow remains the source of truth — never Clerk metadata alone.
+ */
+object PermissionCodes {
+    const val ALLOCATIONS_VIEW = "ALLOCATIONS.VIEW"
+    const val ALLOCATIONS_CREATE = "ALLOCATIONS.CREATE"
+    const val ALLOCATIONS_EDIT = "ALLOCATIONS.EDIT"
+    const val ALLOCATIONS_EDIT_OWN = "ALLOCATIONS.EDIT_OWN"
+    const val ALLOCATIONS_COMMENT = "ALLOCATIONS.COMMENT"
+    const val ALLOCATIONS_REVIEW = "ALLOCATIONS.REVIEW"
+    const val ALLOCATIONS_APPROVE = "ALLOCATIONS.APPROVE"
+    const val ALLOCATIONS_REJECT = "ALLOCATIONS.REJECT"
+
+    const val UNITS_VIEW = "UNITS.VIEW"
+    const val UNITS_CREATE = "UNITS.CREATE"
+    const val UNITS_EDIT = "UNITS.EDIT"
+    const val UNITS_DELETE = "UNITS.DELETE"
+
+    const val PROGRAMS_VIEW = "PROGRAMS.VIEW"
+    const val PROGRAMS_CREATE = "PROGRAMS.CREATE"
+    const val PROGRAMS_EDIT = "PROGRAMS.EDIT"
+
+    const val REPORTS_VIEW = "REPORTS.VIEW"
+    const val REPORTS_EXPORT = "REPORTS.EXPORT"
+
+    const val USERS_VIEW = "USERS.VIEW"
+    const val USERS_INVITE = "USERS.INVITE"
+    const val USERS_MANAGE = "USERS.MANAGE"
+
+    const val DEPARTMENT_VIEW = "DEPARTMENT.VIEW"
+    const val DEPARTMENT_MANAGE = "DEPARTMENT.MANAGE"
+
+    const val INSTITUTION_MANAGE = "INSTITUTION.MANAGE"
+
+    val ALL: Set<String> = setOf(
+        ALLOCATIONS_VIEW, ALLOCATIONS_CREATE, ALLOCATIONS_EDIT, ALLOCATIONS_EDIT_OWN,
+        ALLOCATIONS_COMMENT, ALLOCATIONS_REVIEW, ALLOCATIONS_APPROVE, ALLOCATIONS_REJECT,
+        UNITS_VIEW, UNITS_CREATE, UNITS_EDIT, UNITS_DELETE,
+        PROGRAMS_VIEW, PROGRAMS_CREATE, PROGRAMS_EDIT,
+        REPORTS_VIEW, REPORTS_EXPORT,
+        USERS_VIEW, USERS_INVITE, USERS_MANAGE,
+        DEPARTMENT_VIEW, DEPARTMENT_MANAGE,
+        INSTITUTION_MANAGE
+    )
+
+    val TEMPLATES: Map<String, Set<String>> = mapOf(
+        "LECTURER_DEFAULTS" to setOf(
+            ALLOCATIONS_VIEW, ALLOCATIONS_EDIT_OWN, ALLOCATIONS_COMMENT, ALLOCATIONS_REVIEW,
+            UNITS_VIEW, REPORTS_VIEW, DEPARTMENT_VIEW
+        ),
+        "REVIEWER" to setOf(
+            ALLOCATIONS_VIEW, ALLOCATIONS_COMMENT, ALLOCATIONS_REVIEW, UNITS_VIEW, DEPARTMENT_VIEW
+        ),
+        "COORDINATOR" to setOf(
+            ALLOCATIONS_VIEW, ALLOCATIONS_CREATE, ALLOCATIONS_EDIT, ALLOCATIONS_COMMENT, ALLOCATIONS_REVIEW,
+            UNITS_VIEW, UNITS_EDIT, REPORTS_VIEW, DEPARTMENT_VIEW
+        ),
+        "CUSTOM" to emptySet()
+    )
+
+    fun defaultsForRole(role: String): Set<String> = when (role.trim().uppercase()) {
+        "SUPER_ADMIN" -> ALL
+        "INSTITUTION_ADMIN" -> ALL - setOf() // institution-wide; platform SUPER still separate
+        "SCHOOL_DEAN", "SCHOOL_ADMIN" -> setOf(
+            ALLOCATIONS_VIEW, ALLOCATIONS_CREATE, ALLOCATIONS_EDIT, ALLOCATIONS_COMMENT, ALLOCATIONS_REVIEW,
+            ALLOCATIONS_APPROVE, ALLOCATIONS_REJECT,
+            UNITS_VIEW, UNITS_CREATE, UNITS_EDIT,
+            PROGRAMS_VIEW, PROGRAMS_CREATE, PROGRAMS_EDIT,
+            REPORTS_VIEW, REPORTS_EXPORT,
+            USERS_VIEW, USERS_INVITE,
+            DEPARTMENT_VIEW, DEPARTMENT_MANAGE
+        )
+        "DEPARTMENT_CHAIR" -> setOf(
+            ALLOCATIONS_VIEW, ALLOCATIONS_CREATE, ALLOCATIONS_EDIT, ALLOCATIONS_COMMENT, ALLOCATIONS_REVIEW,
+            ALLOCATIONS_APPROVE, ALLOCATIONS_REJECT,
+            UNITS_VIEW, UNITS_CREATE, UNITS_EDIT, UNITS_DELETE,
+            PROGRAMS_VIEW, PROGRAMS_EDIT,
+            REPORTS_VIEW, REPORTS_EXPORT,
+            USERS_VIEW, USERS_INVITE,
+            DEPARTMENT_VIEW, DEPARTMENT_MANAGE
+        )
+        "LECTURER" -> TEMPLATES.getValue("LECTURER_DEFAULTS")
+        "STUDENT", "STAFF" -> setOf(ALLOCATIONS_VIEW, UNITS_VIEW, DEPARTMENT_VIEW, REPORTS_VIEW)
+        "VIEWER" -> setOf(ALLOCATIONS_VIEW, UNITS_VIEW, REPORTS_VIEW, DEPARTMENT_VIEW)
+        else -> setOf(ALLOCATIONS_VIEW, DEPARTMENT_VIEW)
+    }
+
+    /** Permissions an actor role is allowed to grant to others. */
+    fun delegatableBy(role: String): Set<String> = when (role.trim().uppercase()) {
+        "SUPER_ADMIN" -> ALL
+        "INSTITUTION_ADMIN" -> ALL - setOf(INSTITUTION_MANAGE) // still can manage institution itself via role
+        "DEPARTMENT_CHAIR" -> setOf(
+            ALLOCATIONS_VIEW, ALLOCATIONS_COMMENT, ALLOCATIONS_REVIEW, ALLOCATIONS_EDIT_OWN,
+            UNITS_VIEW, REPORTS_VIEW, DEPARTMENT_VIEW, USERS_VIEW
+        )
+        "SCHOOL_DEAN", "SCHOOL_ADMIN" -> setOf(
+            ALLOCATIONS_VIEW, ALLOCATIONS_CREATE, ALLOCATIONS_EDIT, ALLOCATIONS_COMMENT, ALLOCATIONS_REVIEW,
+            UNITS_VIEW, UNITS_EDIT, REPORTS_VIEW, USERS_VIEW, USERS_INVITE, DEPARTMENT_VIEW
+        )
+        else -> emptySet()
+    }
+
+    fun normalize(codes: Collection<String>): Set<String> =
+        codes.map { it.trim().uppercase() }.filter { it in ALL }.toSet()
+}

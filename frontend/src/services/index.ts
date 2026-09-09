@@ -1,4 +1,4 @@
-export { api, setTenantId } from './api';
+export { api, setTenantId, clearClientSession } from './api';
 export { platformApi } from './platformApi';
 export {
   authService,

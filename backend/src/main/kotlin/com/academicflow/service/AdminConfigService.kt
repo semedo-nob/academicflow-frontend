@@ -1,13 +1,26 @@
 package com.academicflow.service
 
 import com.academicflow.config.TenantContext
+import com.academicflow.config.UserContext
+import com.academicflow.config.ClerkContext
 import com.academicflow.dto.*
 import com.academicflow.entity.*
 import com.academicflow.repository.*
+import com.academicflow.service.auth.AuthIdentityService
+import com.academicflow.service.email.EmailDeliveryStatus
+import com.academicflow.service.email.EmailMessage
+import com.academicflow.service.email.EmailService
+import com.academicflow.service.email.InvitationEmailTemplates
+import com.academicflow.service.permission.PermissionCodes
+import com.academicflow.service.permission.PermissionService
+import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.util.UUID
 
@@ -25,8 +38,14 @@ class AdminConfigService(
     private val orgRepo: OrganizationNodeRepository,
     private val auditRepo: AuditLogRepository,
     private val invitationRepo: InvitationRepository,
-    private val membershipRepo: OrganizationMembershipRepository
+    private val membershipRepo: OrganizationMembershipRepository,
+    private val emailService: EmailService,
+    private val authIdentityService: AuthIdentityService,
+    private val permissionService: PermissionService,
+    @Value("\${academicflow.app-base-url:http://127.0.0.1:5173}") private val appBaseUrl: String,
+    @Value("\${academicflow.invitation-expiry-hours:336}") private val invitationExpiryHours: Long
 ) {
+    private val log = LoggerFactory.getLogger(AdminConfigService::class.java)
     fun listInstitutions(): List<InstitutionDto> =
         tenantRepo.findAll()
             .sortedByDescending { it.createdAt }
@@ -575,11 +594,15 @@ class AdminConfigService(
         )
     }
 
-    fun listInvitations(): List<InvitationDto> =
-        invitationRepo.findByTenantIdOrderByCreatedAtDesc(TenantContext.get()).map { toInvitationDto(it) }
+    fun listInvitations(): List<InvitationDto> {
+        val tenantId = TenantContext.get()
+        val nodes = orgRepo.findByTenantIdOrderByNameAsc(tenantId).associateBy { it.id }
+        return invitationRepo.findByTenantIdOrderByCreatedAtDesc(tenantId).map { toInvitationDto(it, nodes[it.organizationNodeId]?.name) }
+    }
 
     @Transactional
     fun createInvitation(req: CreateInvitationRequest): InvitationDto {
+        permissionService.require(PermissionCodes.USERS_INVITE)
         val tenantId = TenantContext.get()
         val email = req.email.trim().lowercase()
         val name = req.name.trim()
@@ -588,124 +611,427 @@ class AdminConfigService(
             throw IllegalArgumentException("An active user with this email already exists")
         }
         invitationRepo.findByTenantIdAndEmailIgnoreCaseAndStatus(tenantId, email, "PENDING")
-            .forEach {
-                it.status = "REVOKED"
-                invitationRepo.save(it)
-            }
+            .forEach { revokeInvitationEntity(it, "Superseded by a new invitation") }
+        val role = req.role.trim().ifBlank { "VIEWER" }.uppercase()
         val orgId = resolveInvitationOrgId(tenantId, req.organizationNodeId, req.organization)
-        val token = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID().toString().replace("-", "").take(8)
+        validateInvitationTarget(tenantId, role, orgId)
+
+        val template = req.permissionTemplate?.trim()?.uppercase().orEmpty()
+        val fromTemplate = when {
+            template.isBlank() || template == "ROLE_DEFAULTS" || template == "USE_ROLE_DEFAULTS" ->
+                PermissionCodes.defaultsForRole(role)
+            template == "LECTURER_DEFAULTS" || template == "LECTURER" ->
+                PermissionCodes.TEMPLATES.getValue("LECTURER_DEFAULTS")
+            PermissionCodes.TEMPLATES.containsKey(template) ->
+                PermissionCodes.TEMPLATES.getValue(template)
+            else -> PermissionCodes.defaultsForRole(role)
+        }
+        val overrides = PermissionCodes.normalize(req.permissions ?: emptyList())
+        val assigned = if (template == "CUSTOM") overrides else (fromTemplate + overrides)
+        val actorRole = UserContext.get()?.role ?: "INSTITUTION_ADMIN"
+        permissionService.assertCanDelegate(actorRole, assigned)
+
+        val rawToken = InvitationTokens.generateRawToken()
+        val tokenHash = InvitationTokens.hash(rawToken)
         val saved = invitationRepo.save(
             Invitation(
                 tenantId = tenantId,
                 email = email,
                 fullName = name,
-                role = req.role.trim().ifBlank { "VIEWER" },
+                role = role,
                 organizationNodeId = orgId,
-                token = token,
+                token = tokenHash,
+                tokenHash = tokenHash,
                 status = "PENDING",
-                expiresAt = Instant.now().plus(14, ChronoUnit.DAYS)
+                invitedBy = UserContext.get()?.userId,
+                expiresAt = Instant.now().plus(invitationExpiryHours, ChronoUnit.HOURS),
+                deliveryStatus = EmailDeliveryStatus.QUEUED.name,
+                permissionsJson = encodePermissions(assigned),
+                permissionTemplate = template.ifBlank { "ROLE_DEFAULTS" }
             )
         )
-        audit("Invitation sent", "Invitation", saved.id.toString(), "${saved.email} · ${saved.role}")
-        return toInvitationDto(saved)
+        val deptName = orgId?.let { oid -> orgRepo.findByTenantIdAndId(tenantId, oid)?.name }
+        val send = deliverInvitationEmail(saved, rawToken, deptName)
+        applyDeliveryResult(saved, send)
+        invitationRepo.save(saved)
+        audit("Invitation created", "Invitation", saved.id.toString(), "${saved.email} · ${saved.role} · delivery=${saved.deliveryStatus}")
+        log.info(
+            "invitation.created id={} tenantId={} role={} delivery={} provider={}",
+            saved.id, tenantId, saved.role, saved.deliveryStatus, saved.emailProvider
+        )
+        val message = when (saved.deliveryStatus) {
+            EmailDeliveryStatus.SENT.name -> "Invitation created and email sent."
+            EmailDeliveryStatus.FAILED.name -> "Invitation created, but email delivery failed. Copy the link or retry email."
+            else -> "Invitation created. Copy the invitation link to share it."
+        }
+        return toInvitationDto(saved, deptName, rawToken, emailSent = send.success, message = message)
+    }
+
+    @Transactional
+    fun resendInvitation(id: UUID): InvitationDto {
+        permissionService.require(PermissionCodes.USERS_INVITE)
+        val tenantId = TenantContext.get()
+        val inv = invitationRepo.findByTenantIdAndId(tenantId, id)
+            ?: throw NoSuchElementException("Invitation not found")
+        if (inv.status != "PENDING") throw IllegalStateException("Only pending invitations can be resent")
+        if (inv.expiresAt.isBefore(Instant.now())) {
+            inv.status = "EXPIRED"
+            invitationRepo.save(inv)
+            throw IllegalStateException("This invitation has expired")
+        }
+        val rawToken = rotateInvitationToken(inv)
+        val deptName = inv.organizationNodeId?.let { oid -> orgRepo.findByTenantIdAndId(tenantId, oid)?.name }
+        val send = deliverInvitationEmail(inv, rawToken, deptName)
+        applyDeliveryResult(inv, send)
+        invitationRepo.save(inv)
+        audit("Invitation resent", "Invitation", inv.id.toString(), "${inv.email} · delivery=${inv.deliveryStatus}")
+        log.info("invitation.resent id={} delivery={}", inv.id, inv.deliveryStatus)
+        val message = if (send.success) "Invitation email resent." else "Email delivery failed. Copy the new invitation link."
+        return toInvitationDto(inv, deptName, rawToken, emailSent = send.success, message = message)
+    }
+
+    @Transactional
+    fun rotateInvitationLink(id: UUID): InvitationDto {
+        val tenantId = TenantContext.get()
+        val inv = invitationRepo.findByTenantIdAndId(tenantId, id)
+            ?: throw NoSuchElementException("Invitation not found")
+        if (inv.status != "PENDING") throw IllegalStateException("Only pending invitations can issue a link")
+        if (inv.expiresAt.isBefore(Instant.now())) {
+            inv.status = "EXPIRED"
+            invitationRepo.save(inv)
+            throw IllegalStateException("This invitation has expired")
+        }
+        val rawToken = rotateInvitationToken(inv)
+        invitationRepo.save(inv)
+        audit("Invitation link rotated", "Invitation", inv.id.toString(), inv.email)
+        log.info("invitation.link_rotated id={}", inv.id)
+        val deptName = inv.organizationNodeId?.let { oid -> orgRepo.findByTenantIdAndId(tenantId, oid)?.name }
+        return toInvitationDto(
+            inv,
+            deptName,
+            rawToken,
+            emailSent = false,
+            message = "New invitation link created. Previous links for this invite no longer work."
+        )
+    }
+
+    @Transactional
+    fun revokeInvitation(id: UUID): InvitationDto {
+        permissionService.require(PermissionCodes.USERS_INVITE)
+        val tenantId = TenantContext.get()
+        val inv = invitationRepo.findByTenantIdAndId(tenantId, id)
+            ?: throw NoSuchElementException("Invitation not found")
+        if (inv.status != "PENDING") throw IllegalStateException("Only pending invitations can be revoked")
+        revokeInvitationEntity(inv, "Revoked by administrator")
+        invitationRepo.save(inv)
+        audit("Invitation revoked", "Invitation", inv.id.toString(), inv.email)
+        log.info("invitation.revoked id={}", inv.id)
+        val deptName = inv.organizationNodeId?.let { oid -> orgRepo.findByTenantIdAndId(tenantId, oid)?.name }
+        return toInvitationDto(inv, deptName, message = "Invitation revoked.")
     }
 
     fun previewInvitation(token: String): InvitationPreviewDto {
-        val inv = invitationRepo.findByToken(token.trim())
+        val inv = findInvitationByRawToken(token.trim())
             ?: throw NoSuchElementException("Invitation not found")
         val tenant = tenantRepo.findById(inv.tenantId).orElse(null)
         val expired = inv.expiresAt.isBefore(Instant.now()) || inv.status != "PENDING"
+        if (inv.status == "PENDING" && inv.expiresAt.isBefore(Instant.now())) {
+            inv.status = "EXPIRED"
+            invitationRepo.save(inv)
+        }
         return InvitationPreviewDto(
             email = inv.email,
             name = inv.fullName,
             role = inv.role,
             institutionName = tenant?.name ?: "Institution",
             status = inv.status,
-            expired = expired
+            expired = expired || inv.status == "EXPIRED"
         )
     }
 
     @Transactional
     fun acceptInvitation(req: AcceptInvitationRequest): LoginResponse {
-        val inv = invitationRepo.findByToken(req.token.trim())
+        val inv = findInvitationByRawToken(req.token.trim())
             ?: throw NoSuchElementException("Invitation not found")
+        if (inv.status == "REVOKED") throw IllegalStateException("This invitation has been revoked")
+        if (inv.status == "ACCEPTED") throw IllegalStateException("This invitation was already accepted")
         if (inv.status != "PENDING") throw IllegalStateException("This invitation is no longer valid")
         if (inv.expiresAt.isBefore(Instant.now())) {
             inv.status = "EXPIRED"
             invitationRepo.save(inv)
+            log.info("invitation.expired id={}", inv.id)
             throw IllegalStateException("This invitation has expired")
         }
-        val name = req.name?.trim()?.takeIf { it.isNotEmpty() } ?: inv.fullName
-        val existing = userRepo.findByTenantIdAndEmail(inv.tenantId, inv.email)
-        val user = if (existing != null) {
-            existing.fullName = name
-            existing.role = inv.role
-            existing.organizationNodeId = inv.organizationNodeId ?: existing.organizationNodeId
-            existing.active = true
-            existing.accountStatus = "ACTIVE"
-            existing.passwordHash = req.password?.takeIf { it.isNotBlank() } ?: existing.passwordHash ?: "local"
-            userRepo.save(existing)
-        } else {
-            userRepo.save(
-                AppUser(
+
+        val clerkIdentity = ClerkContext.get()
+        if (authIdentityService.clerkEnabled()) {
+            if (clerkIdentity == null) {
+                throw IllegalStateException("Sign in with Clerk to accept this invitation")
+            }
+            if (!clerkIdentity.email.equals(inv.email, ignoreCase = true)) {
+                throw IllegalArgumentException(
+                    "This invitation was issued to ${inv.email}. You authenticated as ${clerkIdentity.email}. Sign in with the invited email address."
+                )
+            }
+        }
+
+        val previousTenant = runCatching { TenantContext.get() }.getOrNull()
+        TenantContext.set(inv.tenantId)
+        try {
+            val name = req.name?.trim()?.takeIf { it.isNotEmpty() }
+                ?: clerkIdentity?.fullName
+                ?: inv.fullName
+            val isChair = inv.role.equals("DEPARTMENT_CHAIR", ignoreCase = true)
+            if (isChair && inv.organizationNodeId == null) {
+                throw IllegalArgumentException("Chair invitation is missing department")
+            }
+            if (isChair) {
+                val dept = orgRepo.findByTenantIdAndId(inv.tenantId, inv.organizationNodeId!!)
+                    ?: throw IllegalArgumentException("Department for this invitation no longer exists")
+                if (!dept.type.equals("Department", ignoreCase = true)) {
+                    throw IllegalArgumentException("Chair invitation must point at a Department node")
+                }
+            }
+
+            val existing = when {
+                clerkIdentity != null ->
+                    userRepo.findByClerkUserId(clerkIdentity.clerkUserId)
+                        ?: userRepo.findByTenantIdAndEmail(inv.tenantId, inv.email)
+                else -> userRepo.findByTenantIdAndEmail(inv.tenantId, inv.email)
+            }
+            val user = if (existing != null) {
+                existing.fullName = name
+                existing.role = inv.role
+                existing.organizationNodeId = inv.organizationNodeId ?: existing.organizationNodeId
+                existing.active = true
+                existing.accountStatus = "ACTIVE"
+                if (clerkIdentity != null) {
+                    existing.clerkUserId = clerkIdentity.clerkUserId
+                    existing.passwordHash = existing.passwordHash ?: "clerk"
+                } else {
+                    existing.passwordHash = req.password?.takeIf { it.isNotBlank() } ?: existing.passwordHash ?: "local"
+                }
+                userRepo.save(existing)
+            } else {
+                userRepo.save(
+                    AppUser(
+                        tenantId = inv.tenantId,
+                        email = inv.email,
+                        fullName = name,
+                        role = inv.role,
+                        organizationNodeId = inv.organizationNodeId,
+                        clerkUserId = clerkIdentity?.clerkUserId,
+                        passwordHash = if (clerkIdentity != null) "clerk" else (req.password?.takeIf { it.isNotBlank() } ?: "local"),
+                        active = true,
+                        accountStatus = "ACTIVE"
+                    )
+                )
+            }
+            inv.status = "ACCEPTED"
+            inv.acceptedAt = Instant.now()
+            // Invalidate token material after acceptance (single-use)
+            val burned = InvitationTokens.hash("accepted:${inv.id}:${Instant.now()}")
+            inv.token = burned
+            inv.tokenHash = burned
+            invitationRepo.save(inv)
+
+            if (isChair) {
+                val deptId = inv.organizationNodeId!!
+                membershipRepo.findByTenantIdAndOrganizationNodeIdAndRoleAndStatus(
+                    inv.tenantId, deptId, "DEPARTMENT_CHAIR", "ACTIVE"
+                ).forEach { existingChair ->
+                    if (existingChair.userId != user.id) {
+                        existingChair.status = "INACTIVE"
+                        membershipRepo.save(existingChair)
+                    }
+                }
+                user.role = "DEPARTMENT_CHAIR"
+                user.organizationNodeId = deptId
+                userRepo.save(user)
+                upsertMembership(inv.tenantId, user.id, deptId, "DEPARTMENT_CHAIR", primary = true)
+            } else {
+                user.organizationNodeId?.let { orgId ->
+                    upsertMembership(user.tenantId, user.id, orgId, user.role, primary = true)
+                }
+            }
+
+            val invitePerms = parseInvitationPermissions(inv.permissionsJson)
+            if (invitePerms.isNotEmpty()) {
+                permissionService.applyInvitationPermissions(
                     tenantId = inv.tenantId,
-                    email = inv.email,
-                    fullName = name,
-                    role = inv.role,
-                    organizationNodeId = inv.organizationNodeId,
-                    passwordHash = req.password?.takeIf { it.isNotBlank() } ?: "local",
-                    active = true,
-                    accountStatus = "ACTIVE"
+                    userId = user.id,
+                    permissions = invitePerms,
+                    grantedBy = inv.invitedBy,
+                    organizationNodeId = inv.organizationNodeId
+                )
+            }
+
+            auditRepo.save(
+                AuditLog(
+                    tenantId = inv.tenantId,
+                    actorId = user.id,
+                    action = if (isChair) "Invitation accepted (chair)" else "Invitation accepted",
+                    entityType = "Invitation",
+                    entityId = inv.id.toString(),
+                    details = "${user.email} · perms=${invitePerms.size}"
                 )
             )
+            log.info("invitation.accepted id={} userId={} role={}", inv.id, user.id, user.role)
+            return authIdentityService.toLoginResponse(user)
+        } finally {
+            if (previousTenant != null) TenantContext.set(previousTenant)
+            else TenantContext.clear()
         }
-        inv.status = "ACCEPTED"
-        inv.acceptedAt = Instant.now()
-        invitationRepo.save(inv)
-        user.organizationNodeId?.let { orgId ->
-            upsertMembership(user.tenantId, user.id, orgId, user.role, primary = true)
-        }
-        auditRepo.save(
-            AuditLog(
-                tenantId = inv.tenantId,
-                actorId = user.id,
-                action = "Invitation accepted",
-                entityType = "Invitation",
-                entityId = inv.id.toString(),
-                details = user.email
-            )
-        )
-        return LoginResponse(
-            email = user.email,
-            name = user.fullName,
-            role = user.role,
-            tenantId = user.tenantId,
-            userId = user.id,
-            organizationNodeId = user.organizationNodeId,
-            departmentName = user.organizationNodeId?.let { oid ->
-                orgRepo.findById(oid).orElse(null)?.name
-            },
-            activeDepartmentId = user.organizationNodeId,
-            activeDepartmentName = user.organizationNodeId?.let { oid ->
-                orgRepo.findById(oid).orElse(null)?.name
-            },
-            activeRole = user.role,
-            memberships = emptyList()
-        )
     }
 
-    private fun toInvitationDto(i: Invitation) = InvitationDto(
+    private fun validateInvitationTarget(tenantId: UUID, role: String, orgId: UUID?) {
+        if (role in listOf("DEPARTMENT_CHAIR", "SCHOOL_ADMIN", "SCHOOL_DEAN", "INSTITUTION_ADMIN", "LECTURER", "STUDENT") && orgId == null) {
+            throw IllegalArgumentException("Organization is required for $role invitations")
+        }
+        if (orgId == null) return
+        val org = orgRepo.findByTenantIdOrderByNameAsc(tenantId).firstOrNull { it.id == orgId }
+            ?: throw IllegalArgumentException("Organization node not found")
+        when (role) {
+            "DEPARTMENT_CHAIR", "LECTURER", "STUDENT" -> {
+                if (!org.type.equals("Department", ignoreCase = true)) {
+                    throw IllegalArgumentException(
+                        "$role invites must target a Department node (got ${org.type}: ${org.name})"
+                    )
+                }
+            }
+            "SCHOOL_ADMIN", "SCHOOL_DEAN" -> {
+                if (!org.type.equals("School", ignoreCase = true) &&
+                    !org.type.equals("Faculty", ignoreCase = true)
+                ) {
+                    throw IllegalArgumentException("School Admin invites must target a School or Faculty node")
+                }
+            }
+            "INSTITUTION_ADMIN" -> {
+                if (!org.type.equals("University", ignoreCase = true) &&
+                    !org.type.equals("College", ignoreCase = true)
+                ) {
+                    throw IllegalArgumentException("Institution Admin invites should target the University (or College) root")
+                }
+            }
+        }
+    }
+
+    private fun findInvitationByRawToken(raw: String): Invitation? {
+        if (raw.isBlank()) return null
+        val hash = InvitationTokens.hash(raw)
+        return invitationRepo.findByTokenHash(hash)
+            ?: invitationRepo.findByToken(hash)
+            ?: invitationRepo.findByToken(raw) // legacy plaintext tokens
+    }
+
+    private fun rotateInvitationToken(inv: Invitation): String {
+        val rawToken = InvitationTokens.generateRawToken()
+        val tokenHash = InvitationTokens.hash(rawToken)
+        inv.token = tokenHash
+        inv.tokenHash = tokenHash
+        return rawToken
+    }
+
+    private fun revokeInvitationEntity(inv: Invitation, reason: String) {
+        inv.status = "REVOKED"
+        inv.revokedAt = Instant.now()
+        inv.deliveryError = reason
+        val burned = InvitationTokens.hash("revoked:${inv.id}:${Instant.now()}")
+        inv.token = burned
+        inv.tokenHash = burned
+    }
+
+    private fun deliverInvitationEmail(
+        inv: Invitation,
+        rawToken: String,
+        departmentName: String?
+    ): com.academicflow.service.email.EmailSendResult {
+        val tenant = tenantRepo.findById(inv.tenantId).orElse(null)
+        val acceptUrl = "${appBaseUrl.trimEnd('/')}/invite/$rawToken"
+        val expiresLabel = DateTimeFormatter.ISO_LOCAL_DATE
+            .withZone(ZoneOffset.UTC)
+            .format(inv.expiresAt)
+        val invitedByName = inv.invitedBy?.let { uid ->
+            userRepo.findById(uid).orElse(null)?.fullName
+        }
+        val template = InvitationEmailTemplates.invitation(
+            institutionName = tenant?.name ?: "your institution",
+            departmentName = departmentName,
+            roleLabel = InvitationEmailTemplates.roleLabel(inv.role),
+            inviteeName = inv.fullName,
+            acceptUrl = acceptUrl,
+            expiresLabel = expiresLabel,
+            invitedByName = invitedByName
+        )
+        val message = EmailMessage(
+            to = inv.email,
+            subject = template.subject,
+            htmlBody = template.htmlBody,
+            textBody = template.textBody,
+            tags = template.tags + mapOf("invitationId" to inv.id.toString())
+        )
+        return try {
+            emailService.send(message)
+        } catch (e: Exception) {
+            log.warn("invitation.send_failed id={} error={}", inv.id, e.message)
+            com.academicflow.service.email.EmailSendResult(
+                provider = emailService.providerId,
+                success = false,
+                error = e.message ?: "Email send failed"
+            )
+        }
+    }
+
+    private fun applyDeliveryResult(inv: Invitation, send: com.academicflow.service.email.EmailSendResult) {
+        inv.emailProvider = send.provider
+        inv.lastSentAt = Instant.now()
+        if (send.success) {
+            inv.deliveryStatus = EmailDeliveryStatus.SENT.name
+            inv.deliveryError = null
+            log.info("invitation.sent id={} provider={}", inv.id, send.provider)
+        } else {
+            inv.deliveryStatus = EmailDeliveryStatus.FAILED.name
+            inv.deliveryError = send.error
+            log.warn("invitation.send_failed id={} provider={} error={}", inv.id, send.provider, send.error)
+        }
+    }
+
+    private fun toInvitationDto(
+        i: Invitation,
+        organizationName: String? = null,
+        rawToken: String? = null,
+        emailSent: Boolean? = null,
+        message: String? = null
+    ) = InvitationDto(
         id = i.id,
         email = i.email,
         name = i.fullName,
         role = i.role,
         organizationNodeId = i.organizationNodeId,
+        organizationName = organizationName,
         status = i.status,
-        token = i.token,
-        invitePath = "/login?invite=${i.token}",
+        token = rawToken,
+        invitePath = rawToken?.let { "/invite/$it" },
         createdAt = i.createdAt.toString(),
-        expiresAt = i.expiresAt.toString()
+        expiresAt = i.expiresAt.toString(),
+        deliveryStatus = i.deliveryStatus,
+        deliveryError = i.deliveryError,
+        emailProvider = i.emailProvider,
+        lastSentAt = i.lastSentAt?.toString(),
+        emailSent = emailSent,
+        message = message,
+        permissions = parseInvitationPermissions(i.permissionsJson),
+        permissionTemplate = i.permissionTemplate
     )
+
+    private fun parseInvitationPermissions(raw: String?): List<String> {
+        if (raw.isNullOrBlank()) return emptyList()
+        val codes = Regex("\"([^\"]+)\"").findAll(raw).map { it.groupValues[1] }.toList()
+        return PermissionCodes.normalize(codes).sorted().toList()
+    }
+
+    private fun encodePermissions(codes: Collection<String>): String =
+        PermissionCodes.normalize(codes).sorted().joinToString(prefix = "[", postfix = "]") { "\"$it\"" }
 
     @Transactional
     fun updateUser(id: UUID, req: UpdateUserRequest): UserDto {

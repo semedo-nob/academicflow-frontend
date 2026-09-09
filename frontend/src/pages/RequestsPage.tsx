@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { REQUESTS } from '../data/mockData';
 import { useApp } from '../context/AppContext';
 import { useFeedback } from '../context/FeedbackContext';
 import { useAsyncData } from '../hooks/useAsyncData';
@@ -505,7 +504,7 @@ export function RequestsPage() {
   const { error: notifyError, success, confirm } = useFeedback();
   const { data: requests, fromApi } = useAsyncData(
     () => requestService.list(),
-    REQUESTS as unknown as ApiTeachingRequest[],
+    [],
     [tick],
   );
   const { data: orgs } = useAsyncData(() => organizationService.list(), [], [tick]);

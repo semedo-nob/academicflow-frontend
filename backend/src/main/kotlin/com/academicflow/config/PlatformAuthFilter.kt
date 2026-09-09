@@ -13,12 +13,12 @@ import org.springframework.web.filter.OncePerRequestFilter
 
 /**
  * Enforces that platform API calls (`/api/platform/...`) are made by an active SUPER_ADMIN.
- * Uses X-User-Email (set by the frontend after login) — not a substitute for JWT in production,
- * but prevents institution users from calling platform APIs by URL alone.
+ * Prefers Clerk-resolved UserContext; falls back to legacy X-User-Email only when legacy auth is enabled.
  */
 @Component
 class PlatformAuthFilter(
-    private val userRepo: AppUserRepository
+    private val userRepo: AppUserRepository,
+    private val authIdentityService: com.academicflow.service.auth.AuthIdentityService
 ) : OncePerRequestFilter() {
     override fun shouldNotFilter(request: HttpServletRequest): Boolean {
         val path = request.requestURI ?: return true
@@ -30,6 +30,26 @@ class PlatformAuthFilter(
         response: HttpServletResponse,
         filterChain: FilterChain
     ) {
+        val principal = UserContext.get()
+        if (principal != null) {
+            if (!principal.role.equals("SUPER_ADMIN", true)) {
+                response.sendError(HttpServletResponse.SC_FORBIDDEN, "Super Admin access required")
+                return
+            }
+            PlatformActorContext.set(principal.email, principal.userId, principal.tenantId)
+            try {
+                filterChain.doFilter(request, response)
+            } finally {
+                PlatformActorContext.clear()
+            }
+            return
+        }
+
+        if (!authIdentityService.legacyEnabled()) {
+            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Platform authentication required")
+            return
+        }
+
         val email = request.getHeader("X-User-Email")?.trim().orEmpty()
         if (email.isEmpty()) {
             response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Platform authentication required")
