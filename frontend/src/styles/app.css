@@ -457,6 +457,13 @@ tbody tr:hover{background:#FAFBFD;}
 .login-card{width:100%;max-width:378px;}
 .login-card h2{font-size:20px;font-weight:700;margin:0 0 5px 0;}
 .login-card p.hint{color:var(--text-secondary);font-size:13px;margin:0 0 28px 0;}
+/* One auth surface: app chrome + Clerk widget, no nested duplicate headings/cards */
+.clerk-auth-host{width:100%;}
+.clerk-auth-host .cl-rootBox,
+.clerk-auth-host .cl-card{width:100% !important;max-width:100% !important;box-shadow:none !important;border:none !important;background:transparent !important;}
+.clerk-auth-host .cl-headerTitle,
+.clerk-auth-host .cl-headerSubtitle{display:none !important;}
+.clerk-auth-host .cl-footer{display:none !important;}
 .field{margin-bottom:16px;}
 .field label{display:block;font-size:12.5px;font-weight:600;margin-bottom:6px;color:var(--text-primary);}
 .field input, .field select{

@@ -10,6 +10,7 @@ import {
 import type { Membership, User } from '../types';
 import { adminService, authService } from '../services';
 import { normalizeRole } from '../lib/access';
+import { clerkConfigured } from '../lib/clerk';
 import { clearClientSession, setActiveDepartmentId, setTenantId } from '../services/api';
 
 interface PeriodState {
@@ -151,8 +152,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () => localStorage.getItem('af_auth') === '1' && !!loadUser().email,
   );
   const [user, setUser] = useState<User>(() => (localStorage.getItem('af_auth') === '1' ? loadUser() : EMPTY_USER));
-  const [authLoading, setAuthLoading] = useState(true);
-  const [clerkEnabled, setClerkEnabled] = useState(false);
+  // Do not block the login shell on /auth/mode. When Clerk is baked into the
+  // SPA build, assume Clerk UI until the API explicitly says otherwise.
+  const [authLoading, setAuthLoading] = useState(false);
+  const [clerkEnabled, setClerkEnabled] = useState(() => clerkConfigured);
   const [sessionEpoch, setSessionEpoch] = useState(0);
   const [drawer, setDrawer] = useState<ReactNode | null>(null);
   const [selectedRequestId, setSelectedRequestId] = useState('');
@@ -266,19 +269,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    const timeout = window.setTimeout(() => {
-      if (!cancelled) {
-        setClerkEnabled(false);
-        setAuthLoading(false);
-      }
-    }, 15000);
-    void authService
-      .authMode()
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 8000);
+    void fetch(`${import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_BASE_URL || '/api'}/auth/mode`, {
+      signal: controller.signal,
+      headers: { Accept: 'application/json' },
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`auth mode ${res.status}`);
+        return res.json() as Promise<{ clerkEnabled?: boolean }>;
+      })
       .then((m) => {
-        if (!cancelled) setClerkEnabled(!!m.clerkEnabled);
+        if (cancelled) return;
+        // Prefer explicit API flag; keep Clerk UI if the SPA was built with a key
+        // and the probe failed to deny Clerk (avoids blank/legacy flash on outages).
+        setClerkEnabled(typeof m.clerkEnabled === 'boolean' ? m.clerkEnabled : clerkConfigured);
       })
       .catch(() => {
-        if (!cancelled) setClerkEnabled(false);
+        if (!cancelled && !clerkConfigured) setClerkEnabled(false);
       })
       .finally(() => {
         window.clearTimeout(timeout);
@@ -287,6 +295,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
       window.clearTimeout(timeout);
+      controller.abort();
     };
   }, []);
 

@@ -35,8 +35,6 @@ export function LoginPage() {
     login,
     authenticated,
     user,
-    clerkEnabled,
-    authLoading,
     applySessionPayload,
     establishClerkSession,
     logout,
@@ -46,7 +44,9 @@ export function LoginPage() {
   const { token: pathInviteToken } = useParams();
   const inviteToken = pathInviteToken?.trim() || params.get('invite')?.trim() || '';
   const mode: Mode = inviteToken ? 'invite' : params.get('mode') === 'register' ? 'register' : 'signin';
-  const useClerkUi = clerkConfigured && clerkEnabled;
+  // Clerk publishable key in the build wins for UI — never show the legacy email/password
+  // form next to Clerk (that was the login-screen conflict).
+  const useClerkUi = clerkConfigured;
 
   const [email, setEmail] = useState(() => localStorage.getItem('af_remember_email') || '');
   const [password, setPassword] = useState('');
@@ -57,7 +57,7 @@ export function LoginPage() {
   const [forgotOpen, setForgotOpen] = useState(false);
   const [forgotMsg, setForgotMsg] = useState<string | null>(null);
   const [inviteName, setInviteName] = useState('');
-  const [clerkAuthMode, setClerkAuthMode] = useState<'sign-in' | 'sign-up'>('sign-in');
+  const [inviteClerkMode, setInviteClerkMode] = useState<'sign-in' | 'sign-up'>('sign-in');
   const [invitePreview, setInvitePreview] = useState<{
     email: string;
     name: string;
@@ -99,16 +99,6 @@ export function LoginPage() {
       cancelled = true;
     };
   }, [inviteToken]);
-
-  if (authLoading) {
-    return (
-      <div id="login-screen">
-        <div className="login-right" style={{ margin: 'auto' }}>
-          <p className="hint">Checking authentication…</p>
-        </div>
-      </div>
-    );
-  }
 
   if (authenticated && mode !== 'invite') {
     return <Navigate to={homePath(user.role)} replace />;
@@ -267,8 +257,8 @@ export function LoginPage() {
                   inviteEmail={invitePreview?.email || email}
                   inviteName={inviteName}
                   expired={!!invitePreview?.expired}
-                  clerkAuthMode={clerkAuthMode}
-                  setClerkAuthMode={setClerkAuthMode}
+                  clerkAuthMode={inviteClerkMode}
+                  setClerkAuthMode={setInviteClerkMode}
                   onAccepted={(role) => {
                     clearRememberedInviteToken();
                     navigate(homePath(normalizeRole(role)));
@@ -312,34 +302,34 @@ export function LoginPage() {
             </>
           ) : mode === 'signin' ? (
             <>
-              <h2>Sign in</h2>
-              <p className="hint">
-                {useClerkUi
-                  ? 'Sign in with your AcademicFlow account (Clerk).'
-                  : 'One account for your institution workspace.'}
-              </p>
+              {!useClerkUi && (
+                <>
+                  <h2>Sign in</h2>
+                  <p className="hint">One account for your institution workspace.</p>
+                </>
+              )}
               {success && (
                 <p className="section-sub" style={{ color: 'var(--success)', marginBottom: 12 }}>
                   {success}
                 </p>
               )}
               {useClerkUi ? (
-                <ClerkSignInPanel
-                  onReady={async () => {
-                    try {
-                      await establishClerkSession();
-                      const raw = localStorage.getItem('af_user');
-                      const role = raw ? normalizeRole(JSON.parse(raw).role) : 'VIEWER';
-                      navigate(await resolvePostLoginPath(role));
-                    } catch (e) {
-                      setError(e instanceof Error ? e.message : 'Could not establish session');
-                    }
-                  }}
-                  error={error}
-                  setError={setError}
-                  clerkAuthMode={clerkAuthMode}
-                  setClerkAuthMode={setClerkAuthMode}
-                />
+                <div className="clerk-auth-host">
+                  <ClerkSignInPanel
+                    onReady={async () => {
+                      try {
+                        await establishClerkSession();
+                        const raw = localStorage.getItem('af_user');
+                        const role = raw ? normalizeRole(JSON.parse(raw).role) : 'VIEWER';
+                        navigate(await resolvePostLoginPath(role));
+                      } catch (e) {
+                        setError(e instanceof Error ? e.message : 'Could not establish session');
+                      }
+                    }}
+                    error={error}
+                    setError={setError}
+                  />
+                </div>
               ) : (
                 <>
                   <div className="field">
@@ -482,14 +472,10 @@ function ClerkSignInPanel({
   onReady,
   error,
   setError,
-  clerkAuthMode,
-  setClerkAuthMode,
 }: {
   onReady: () => Promise<void>;
   error: string | null;
   setError: (e: string | null) => void;
-  clerkAuthMode: 'sign-in' | 'sign-up';
-  setClerkAuthMode: (m: 'sign-in' | 'sign-up') => void;
 }) {
   const { isLoaded, isSignedIn } = useAuth();
   const [busy, setBusy] = useState(false);
@@ -520,40 +506,12 @@ function ClerkSignInPanel({
 
   return (
     <>
-      <div className="btn-row" style={{ marginBottom: 12 }}>
-        <Button
-          size="sm"
-          variant={clerkAuthMode === 'sign-in' ? 'primary' : undefined}
-          onClick={() => setClerkAuthMode('sign-in')}
-        >
-          Sign in
-        </Button>
-        <Button
-          size="sm"
-          variant={clerkAuthMode === 'sign-up' ? 'primary' : undefined}
-          onClick={() => setClerkAuthMode('sign-up')}
-        >
-          Create account
-        </Button>
-      </div>
       {error && (
         <p className="section-sub" style={{ color: 'var(--danger)', marginBottom: 12 }}>
           {error}
         </p>
       )}
-      {clerkAuthMode === 'sign-in' ? (
-        <SignIn
-          routing="hash"
-          forceRedirectUrl="/login"
-          appearance={clerkAppearance}
-        />
-      ) : (
-        <SignUp
-          routing="hash"
-          forceRedirectUrl="/login"
-          appearance={clerkAppearance}
-        />
-      )}
+      <SignIn routing="hash" forceRedirectUrl="/login" appearance={clerkAppearance} />
     </>
   );
 }
@@ -657,10 +615,9 @@ function ClerkInviteAccept({
   }
 
   return (
-    <>
+    <div className="clerk-auth-host">
       <p className="hint">
-        Sign in or create an account with <b>{inviteEmail || 'the invited email'}</b>. Using a different email will be
-        rejected.
+        Use <b>{inviteEmail || 'the invited email'}</b> — a different address will be rejected.
       </p>
       <div className="btn-row" style={{ marginBottom: 12 }}>
         <Button
@@ -688,6 +645,6 @@ function ClerkInviteAccept({
       ) : (
         <SignUp routing="hash" forceRedirectUrl={returnUrl} appearance={clerkAppearance} />
       )}
-    </>
+    </div>
   );
 }

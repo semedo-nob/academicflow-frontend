@@ -13,6 +13,7 @@ dist-ssr
 .env
 .env.*
 !.env.example
+!.env.production.example
 
 .vscode/*
 !.vscode/extensions.json
@@ -25,3 +26,4 @@ dist-ssr
 *.sw?
 .vite
 coverage
+.vercel
