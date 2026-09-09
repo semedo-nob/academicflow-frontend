@@ -20,12 +20,12 @@ primary_region = "lhr"
 
   [[http_service.checks]]
     interval = "15s"
-    timeout = "5s"
-    grace_period = "60s"
+    timeout = "10s"
+    grace_period = "300s"
     method = "GET"
     path = "/actuator/health"
 
 [[vm]]
-  memory = "1gb"
+  memory = "2gb"
   cpu_kind = "shared"
   cpus = 1

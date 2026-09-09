@@ -266,6 +266,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    const timeout = window.setTimeout(() => {
+      if (!cancelled) {
+        setClerkEnabled(false);
+        setAuthLoading(false);
+      }
+    }, 15000);
     void authService
       .authMode()
       .then((m) => {
@@ -275,10 +281,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (!cancelled) setClerkEnabled(false);
       })
       .finally(() => {
+        window.clearTimeout(timeout);
         if (!cancelled) setAuthLoading(false);
       });
     return () => {
       cancelled = true;
+      window.clearTimeout(timeout);
     };
   }, []);
 

@@ -4,7 +4,9 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 export PATH="${HOME}/.fly/bin:${PATH}"
 
 WEB_URL="${WEB_URL:-https://academicflow-frontend.fly.dev}"
-API_URL="${API_URL:-https://academicflow-api.fly.dev}"
+# API origin (no path) — build arg must include /api for Spring controllers
+API_ORIGIN="${API_ORIGIN:-https://academicflow-api.fly.dev}"
+API_URL="${API_URL:-${API_ORIGIN}/api}"
 PK_FILE="${PK_FILE:-$ROOT/frontend/.env.local}"
 
 PK="$(python3 - <<PY
